@@ -423,7 +423,7 @@ pub const Parser = struct {
         input: []const u8,
         terminal: *const Terminal,
         arguments: *std.ArrayListUnmanaged(u8),
-    ) (error{OutOfMemory} || std.fs.File.WriteError || Error)!Statement {
+    ) anyerror!Statement {
         var parser = Parser{ .input = input, .terminal = terminal };
         parser.eat_whitespace();
         const after_whitespace = parser.offset;
@@ -473,8 +473,11 @@ pub const Parser = struct {
 const null_terminal = Terminal{
     .mode_start = null,
     .stdin = undefined,
+    .stdin_buffer = undefined,
     .stderr = null,
+    .stderr_buffer = undefined,
     .stdout = null,
+    .stdout_buffer = undefined,
 };
 
 test "parser.zig: Parser single transfer successfully" {

@@ -3,7 +3,6 @@
 //              Do not manually modify.                 //
 //////////////////////////////////////////////////////////
 
-const std = @import("std");
 const stdx = @import("stdx");
 const protocol = @import("protocol.zig");
 const Decoder = protocol.Decoder;
@@ -796,7 +795,7 @@ pub const ClientMethod = union(ClientMethod.Tag) {
         const tag: Tag = @enumFromInt(@as(u32, @bitCast(header)));
         const value: ClientMethod = switch (tag) {
             inline else => |tag_comptime| value: {
-                const Method = std.meta.TagPayload(ClientMethod, tag_comptime);
+                const Method = @FieldType(ClientMethod, @tagName(tag_comptime));
                 break :value @unionInit(
                     ClientMethod,
                     @tagName(tag_comptime),

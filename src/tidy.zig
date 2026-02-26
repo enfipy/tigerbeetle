@@ -17,7 +17,7 @@ const snap = Snap.snap_fn(module_path);
 const MiB = stdx.MiB;
 
 test "tidy" {
-    const gpa = std.testing.allocator;
+    const gpa = std.heap.page_allocator;
 
     var errors: Errors = .{};
 
@@ -180,7 +180,10 @@ const Errors = struct {
         comptime assert(fmt[fmt.len - 1] == '\n');
         errors.count += 1;
         if (errors.captured) |*captured| {
-            captured.writer(std.testing.allocator).print(fmt, args) catch @panic("OOM");
+            const line = std.fmt.allocPrint(std.testing.allocator, fmt, args) catch @panic("OOM");
+            defer std.testing.allocator.free(line);
+
+            captured.appendSlice(std.testing.allocator, line) catch @panic("OOM");
         } else {
             std.debug.print(fmt, args);
         }
@@ -193,7 +196,12 @@ const SourceFile = struct {
 
     // NB: The return value borrows both path and buffer.
     fn read(path: []const u8, buffer: []u8) !SourceFile {
-        const bytes_read = (try std.fs.cwd().readFile(path, buffer)).len;
+        const bytes_read = (try std.Io.Dir.readFile(
+            std.Io.Dir.cwd(),
+            std.Options.debug_io,
+            path,
+            buffer,
+        )).len;
         if (bytes_read >= buffer.len - 1) return error.FileTooLong;
         buffer[bytes_read] = 0;
         return .{
@@ -690,10 +698,10 @@ fn tidy_ast(
 
     for (tags, datas, 0..) |tag, data, node| {
         if (tag == .fn_decl) { // Check function length.
-            const node_body = data.rhs;
+            const node_body = data.node_and_node[1];
 
-            const token_opening = tree.firstToken(@intCast(node));
-            const token_closing = tree.lastToken(@intCast(node_body));
+            const token_opening = tree.firstToken(@enumFromInt(node));
+            const token_closing = tree.lastToken(node_body);
 
             const line_opening = tree.tokenLocation(0, token_opening).line;
             const line_closing = tree.tokenLocation(0, token_closing).line;
@@ -705,12 +713,12 @@ fn tidy_ast(
             functions_count += 1;
         }
         if (is_bin_op(tag)) { // Forbid mixing bitops and arithmetics without parentheses.
-            inline for (.{ data.lhs, data.rhs }) |child| {
-                const tag_child = tags[child];
+            inline for (.{ data.node_and_node[0], data.node_and_node[1] }) |child| {
+                const tag_child = tags[@intFromEnum(child)];
                 if ((is_bin_op_bitwise(tag) and is_bin_op_arithmetic(tag_child)) or
                     (is_bin_op_arithmetic(tag) and is_bin_op_bitwise(tag_child)))
                 {
-                    const token_opening = tree.firstToken(@intCast(node));
+                    const token_opening = tree.firstToken(@enumFromInt(node));
                     const line_opening = tree.tokenLocation(0, token_opening).line;
                     errors.add_ambiguous_precedence(file, line_opening);
                 }
@@ -1280,7 +1288,7 @@ test "tidy changelog" {
 }
 
 test "tidy no large blobs" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const shell = try Shell.create(allocator);
     defer shell.destroy();
 
@@ -1331,7 +1339,7 @@ test "tidy unix permissions" {
         "src/scripts/cfo_supervisor.sh",
     };
 
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const shell = try Shell.create(allocator);
     defer shell.destroy();
 
@@ -1396,7 +1404,7 @@ test "tidy extensions" {
         .{"src/clients/python/src/tigerbeetle/py.typed"},
     });
 
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const shell = try Shell.create(allocator);
     defer shell.destroy();
 
@@ -1433,7 +1441,7 @@ test "tidy extensions" {
 
 /// Lists all files in the repository.
 fn list_file_paths(shell: *Shell) ![]const []const u8 {
-    var result = std.ArrayList([]const u8).init(shell.arena.allocator());
+    var result = std.array_list.Managed([]const u8).init(shell.arena.allocator());
 
     const files = try shell.exec_stdout("git ls-files -z", .{});
     assert(files.len > 0);

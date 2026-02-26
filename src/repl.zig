@@ -621,6 +621,8 @@ pub fn ReplType(comptime MessageBus: type) type {
                     error.NoDevice,
                     error.ProcessNotFound,
                     => return err,
+
+                    else => return err,
                 }
             };
             try repl.do_statement(statement);
@@ -648,7 +650,7 @@ pub fn ReplType(comptime MessageBus: type) type {
             io: *IO,
             time: Time,
             options: struct {
-                addresses: []const std.net.Address,
+                addresses: []const std.Io.net.IpAddress,
                 cluster_id: u128,
                 verbose: bool,
             },
@@ -767,7 +769,7 @@ pub fn ReplType(comptime MessageBus: type) type {
                                 // TODO: This will be more convenient to express
                                 // once https://github.com/ziglang/zig/issues/2473 is
                                 // in.
-                                => std.posix.exit(1),
+                                => std.process.exit(1),
 
                                 // An unexpected error for which we do
                                 // want the stacktrace.
@@ -790,6 +792,8 @@ pub fn ReplType(comptime MessageBus: type) type {
                                 error.NoDevice,
                                 error.ProcessNotFound,
                                 => return err,
+
+                                else => return err,
                             }
                         };
 

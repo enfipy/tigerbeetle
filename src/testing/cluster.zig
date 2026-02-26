@@ -395,7 +395,7 @@ pub fn ClusterType(comptime StateMachineType: anytype) type {
             ) |*aof, *aof_io, *aof_io_file, i| {
                 const buffer = try allocator.alignedAlloc(
                     u8,
-                    constants.sector_size,
+                    std.mem.Alignment.fromByteUnits(constants.sector_size),
                     // Arbitrary value.
                     32 * MiB,
                 );
@@ -1061,7 +1061,7 @@ pub fn ClusterType(comptime StateMachineType: anytype) type {
         /// Print an error message and then exit with an exit code.
         fn fatal(failure: Failure, comptime fmt_string: []const u8, args: anytype) noreturn {
             std.log.scoped(.state_checker).err(fmt_string, args);
-            std.posix.exit(@intFromEnum(failure));
+            std.process.exit(@intFromEnum(failure));
         }
 
         /// Print the current state of the cluster, intended for printf debugging.

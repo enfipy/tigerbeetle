@@ -117,9 +117,9 @@ pub const Runner = struct {
             /// TigerBeetle cluster ID.
             cluster_id: u128,
             /// TigerBeetle cluster addresses.
-            addresses: []const std.net.Address,
+            addresses: []const std.Io.net.IpAddress,
             /// AMQP host address.
-            host: std.net.Address,
+            host: std.Io.net.IpAddress,
             /// AMQP User name for PLAIN authentication.
             user: []const u8,
             /// AMQP Password for PLAIN authentication.
@@ -871,7 +871,10 @@ pub const Runner = struct {
                     .immediate = false,
                     .properties = .{
                         .delivery_mode = .persistent,
-                        .timestamp = @intCast(std.time.milliTimestamp()),
+                        .timestamp = @intCast(@divTrunc(
+                            std.Io.Timestamp.now(std.Options.debug_io, .real).toNanoseconds(),
+                            std.time.ns_per_ms,
+                        )),
                         .headers = progress_tracker.header(),
                     },
                     .body = null,
@@ -1199,16 +1202,10 @@ const ProgressTrackerMessage = struct {
             .write = &struct {
                 fn write(context: *const anyopaque, encoder: *amqp.Encoder.TableEncoder) void {
                     const message: *const ProgressTrackerMessage = @ptrCast(@alignCast(context));
-                    var release_buffer: [
-                        std.fmt.count("{}", vsr.Release.from(.{
-                            .major = std.math.maxInt(u16),
-                            .minor = std.math.maxInt(u8),
-                            .patch = std.math.maxInt(u8),
-                        }))
-                    ]u8 = undefined;
+                    var release_buffer: [32]u8 = undefined;
                     encoder.put("release", .{ .string = std.fmt.bufPrint(
                         &release_buffer,
-                        "{}",
+                        "{f}",
                         .{message.release},
                     ) catch unreachable });
                     encoder.put("timestamp", .{ .int64 = @intCast(message.timestamp) });
@@ -1263,17 +1260,9 @@ const ProgressTrackerMessage = struct {
 pub const Message = struct {
     pub const content_type = "application/json";
 
-    pub const json_string_size_max = size: {
-        var counting_writer = std.io.countingWriter(std.io.null_writer);
-        std.json.stringify(
-            worse_case(Message),
-            stringify_options,
-            counting_writer.writer(),
-        ) catch unreachable;
-        break :size counting_writer.bytes_written;
-    };
+    pub const json_string_size_max = 4096;
 
-    const stringify_options = std.json.StringifyOptions{
+    const stringify_options = std.json.Stringify.Options{
         .whitespace = .minified,
         .emit_nonportable_numbers_as_strings = true,
     };
@@ -1395,12 +1384,9 @@ pub const Message = struct {
             .write = &struct {
                 fn write(context: *const anyopaque, buffer: []u8) usize {
                     const message: *const Message = @ptrCast(@alignCast(context));
-                    var fbs = std.io.fixedBufferStream(buffer);
-                    std.json.stringify(message, .{
-                        .whitespace = .minified,
-                        .emit_nonportable_numbers_as_strings = true,
-                    }, fbs.writer()) catch unreachable;
-                    return fbs.pos;
+                    var fbs: std.Io.Writer = .fixed(buffer);
+                    std.json.Stringify.value(message, stringify_options, &fbs) catch unreachable;
+                    return fbs.end;
                 }
             }.write,
         };
@@ -1610,11 +1596,11 @@ test "amqp: JSON message" {
         const message = comptime Message.worse_case(Message);
         const size = message.body().write(buffer);
         try testing.expectEqual(@as(usize, 1425), size);
-        try testing.expectEqual(size, buffer.len);
+        try testing.expect(buffer.len >= size);
 
         try snap(@src(),
             \\{"timestamp":"18446744073709551615","type":"two_phase_pending","ledger":4294967295,"transfer":{"id":"340282366920938463463374607431768211455","amount":"340282366920938463463374607431768211455","pending_id":"340282366920938463463374607431768211455","user_data_128":"340282366920938463463374607431768211455","user_data_64":"18446744073709551615","user_data_32":4294967295,"timeout":4294967295,"code":65535,"flags":65535,"timestamp":"18446744073709551615"},"debit_account":{"id":"340282366920938463463374607431768211455","debits_pending":"340282366920938463463374607431768211455","debits_posted":"340282366920938463463374607431768211455","credits_pending":"340282366920938463463374607431768211455","credits_posted":"340282366920938463463374607431768211455","user_data_128":"340282366920938463463374607431768211455","user_data_64":"18446744073709551615","user_data_32":4294967295,"code":65535,"flags":65535,"timestamp":"18446744073709551615"},"credit_account":{"id":"340282366920938463463374607431768211455","debits_pending":"340282366920938463463374607431768211455","debits_posted":"340282366920938463463374607431768211455","credits_pending":"340282366920938463463374607431768211455","credits_posted":"340282366920938463463374607431768211455","user_data_128":"340282366920938463463374607431768211455","user_data_64":"18446744073709551615","user_data_32":4294967295,"code":65535,"flags":65535,"timestamp":"18446744073709551615"}}
-        ).diff(buffer);
+        ).diff(buffer[0..size]);
     }
 }
 

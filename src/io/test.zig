@@ -11,6 +11,7 @@ const MiB = stdx.MiB;
 const TimeOS = @import("../time.zig").TimeOS;
 const Time = @import("../time.zig").Time;
 const IO = @import("../io.zig").IO;
+const io_common = @import("common.zig");
 
 pub const tcp_options: IO.TCPOptions = .{
     .rcvbuf = 0,
@@ -19,6 +20,13 @@ pub const tcp_options: IO.TCPOptions = .{
     .user_timeout_ms = 0,
     .nodelay = false,
 };
+
+fn ip_family(address: std.Io.net.IpAddress) u32 {
+    return switch (address) {
+        .ip4 => posix.AF.INET,
+        .ip6 => posix.AF.INET6,
+    };
+}
 
 test "open/write/read/close/statx" {
     try struct {
@@ -45,7 +53,7 @@ test "open/write/read/close/statx" {
             defer self.io.deinit();
 
             // The file gets created below, either by createFile or openat.
-            defer std.fs.cwd().deleteFile(self.path) catch {};
+            defer std.Io.Dir.deleteFile(std.Io.Dir.cwd(), std.Options.debug_io, self.path) catch {};
 
             var completion: IO.Completion = undefined;
 
@@ -61,10 +69,15 @@ test "open/write/read/close/statx" {
                     std.fs.File.default_mode,
                 );
             } else {
-                const file = try std.fs.cwd().createFile(self.path, .{
-                    .read = true,
-                    .truncate = true,
-                });
+                const file = try std.Io.Dir.createFile(
+                    std.Io.Dir.cwd(),
+                    std.Options.debug_io,
+                    self.path,
+                    .{
+                        .read = true,
+                        .truncate = true,
+                    },
+                );
                 self.openat_callback(&completion, file.handle);
             }
             while (!self.done) try self.io.run();
@@ -82,7 +95,7 @@ test "open/write/read/close/statx" {
         fn openat_callback(
             self: *Context,
             completion: *IO.Completion,
-            result: anyerror!posix.fd_t,
+            result: IO.OpenatError!posix.fd_t,
         ) void {
             self.fd = result catch @panic("openat error");
             self.io.write(
@@ -173,27 +186,20 @@ test "accept/connect/send/receive" {
             var io = try IO.init(32, 0);
             defer io.deinit();
 
-            const address = try std.net.Address.parseIp4("127.0.0.1", 0);
+            const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
             const kernel_backlog = 1;
 
-            const server = try io.open_socket_tcp(address.any.family, tcp_options);
+            const server = try io.open_socket_tcp(ip_family(address), tcp_options);
             defer io.close_socket(server);
 
-            const client = try io.open_socket_tcp(address.any.family, tcp_options);
+            const client = try io.open_socket_tcp(ip_family(address), tcp_options);
             defer io.close_socket(client);
 
-            try posix.setsockopt(
+            const client_address = try io_common.listen(
                 server,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
+                address,
+                .{ .backlog = kernel_backlog },
             );
-            try posix.bind(server, &address.any, address.getOsSockLen());
-            try posix.listen(server, kernel_backlog);
-
-            var client_address = std.net.Address.initIp4(undefined, undefined);
-            var client_address_len = client_address.getOsSockLen();
-            try posix.getsockname(server, &client_address.any, &client_address_len);
 
             var self: Context = .{
                 .io = &io,
@@ -383,7 +389,11 @@ test "event" {
         fn trigger_event(self: *Context) void {
             assert(std.Thread.getCurrentId() != self.main_thread_id);
             while (self.count < events_count) {
-                std.time.sleep(delay + 1);
+                std.Io.sleep(
+                    std.Options.debug_io,
+                    .{ .nanoseconds = @intCast(delay + 1) },
+                    .awake,
+                ) catch unreachable;
 
                 // Triggering the event:
                 self.io.event_trigger(self.event, &self.event_completion);
@@ -461,26 +471,19 @@ test "tick to wait" {
             var self: Context = .{ .io = try IO.init(1, 0) };
             defer self.io.deinit();
 
-            const address = try std.net.Address.parseIp4("127.0.0.1", 0);
+            const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
             const kernel_backlog = 1;
 
-            const server = try self.io.open_socket_tcp(address.any.family, tcp_options);
+            const server = try self.io.open_socket_tcp(ip_family(address), tcp_options);
             defer self.io.close_socket(server);
 
-            try posix.setsockopt(
+            const client_address = try io_common.listen(
                 server,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
+                address,
+                .{ .backlog = kernel_backlog },
             );
-            try posix.bind(server, &address.any, address.getOsSockLen());
-            try posix.listen(server, kernel_backlog);
 
-            var client_address = std.net.Address.initIp4(undefined, undefined);
-            var client_address_len = client_address.getOsSockLen();
-            try posix.getsockname(server, &client_address.any, &client_address_len);
-
-            const client = try self.io.open_socket_tcp(client_address.any.family, tcp_options);
+            const client = try self.io.open_socket_tcp(ip_family(client_address), tcp_options);
             defer self.io.close_socket(client);
 
             // Start the accept.
@@ -582,7 +585,13 @@ test "tick to wait" {
         }
 
         fn os_send(sock: posix.socket_t, buf: []const u8, flags: u32) !usize {
-            return posix.sendto(sock, buf, flags, null, 0);
+            while (true) {
+                switch (posix.errno(std.c.sendto(sock, buf.ptr, buf.len, flags, null, 0))) {
+                    .SUCCESS => return buf.len,
+                    .INTR => continue,
+                    else => |err| return stdx.unexpected_errno("sendto", err),
+                }
+            }
         }
     }.run_test();
 }
@@ -626,20 +635,12 @@ test "pipe data over socket" {
             self.server.fd = try self.io.open_socket_tcp(posix.AF.INET, tcp_options);
             defer self.io.close_socket(self.server.fd.?);
 
-            const address = try std.net.Address.parseIp4("127.0.0.1", 0);
-            try posix.setsockopt(
+            const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+            const client_address = try io_common.listen(
                 self.server.fd.?,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
+                address,
+                .{ .backlog = 1 },
             );
-
-            try posix.bind(self.server.fd.?, &address.any, address.getOsSockLen());
-            try posix.listen(self.server.fd.?, 1);
-
-            var client_address = std.net.Address.initIp4(undefined, undefined);
-            var client_address_len = client_address.getOsSockLen();
-            try posix.getsockname(self.server.fd.?, &client_address.any, &client_address_len);
 
             self.io.accept(
                 *Context,
@@ -780,7 +781,7 @@ test "cancel_all" {
         canceled: bool = false,
 
         fn run_test() !void {
-            defer std.fs.cwd().deleteFile(file_path) catch {};
+            defer std.Io.Dir.deleteFile(std.Io.Dir.cwd(), std.Options.debug_io, file_path) catch {};
 
             var context: Context = .{ .io = try IO.init(32, 0) };
             defer context.io.deinit();
@@ -792,7 +793,10 @@ test "cancel_all" {
 
                 for (file_buffer, 0..) |*b, i| b.* = @intCast(i % 256);
 
-                try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = file_buffer });
+                try std.Io.Dir.writeFile(std.Io.Dir.cwd(), std.Options.debug_io, .{
+                    .sub_path = file_path,
+                    .data = file_buffer,
+                });
             }
 
             var read_completions: [read_count]IO.Completion = undefined;
@@ -818,7 +822,10 @@ test "cancel_all" {
             //
             // (Without DIRECT the reads all finish their callbacks even before io.run() returns.)
             const file = try std.posix.open(file_path, .{ .DIRECT = true }, 0);
-            defer std.posix.close(file);
+            defer (std.Io.File{
+                .handle = file,
+                .flags = .{ .nonblocking = false },
+            }).close(std.Options.debug_io);
 
             for (&read_completions, read_buffers) |*completion, buffer| {
                 context.io.read(*Context, &context, read_callback, completion, file, buffer, 0);
@@ -839,7 +846,11 @@ test "cancel_all" {
             }
 
             const sleep_ms = 50;
-            std.time.sleep(sleep_ms * std.time.ns_per_ms);
+            std.Io.sleep(
+                std.Options.debug_io,
+                .{ .nanoseconds = sleep_ms * std.time.ns_per_ms },
+                .awake,
+            ) catch unreachable;
 
             for (read_buffers, read_buffer_checksums) |buffer, buffer_checksum| {
                 try testing.expectEqual(checksum(buffer), buffer_checksum);
@@ -885,30 +896,15 @@ test "cancel" {
             const buffer: []u8 = try allocator.alloc(u8, buffer_size);
             defer allocator.free(buffer);
 
-            const address = try std.net.Address.parseIp4("127.0.0.1", 0);
+            const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
 
-            const server = try io.open_socket_tcp(address.any.family, tcp_options);
+            const server = try io.open_socket_tcp(ip_family(address), tcp_options);
             defer io.close_socket(server);
 
-            const client = try io.open_socket_tcp(address.any.family, tcp_options);
+            const client = try io.open_socket_tcp(ip_family(address), tcp_options);
             defer io.close_socket(client);
 
-            try posix.setsockopt(
-                server,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
-            );
-            try posix.bind(server, &address.any, address.getOsSockLen());
-            try posix.listen(server, 1);
-
-            var client_address = std.net.Address.initIp4(undefined, undefined);
-            var client_address_len = client_address.getOsSockLen();
-            try posix.getsockname(
-                server,
-                &client_address.any,
-                &client_address_len,
-            );
+            const client_address = try io_common.listen(server, address, .{ .backlog = 1 });
 
             var context: Context = .{
                 .io = &io,

@@ -163,8 +163,8 @@ const Pipe = struct {
                 u63,
                 @intCast(@as(i32, @intCast(delay.time_ms)) + jitter_diff_ms),
             ) * std.time.ns_per_ms;
-            log.debug("delaying {} ({d},{d})", .{
-                std.fmt.fmtDuration(timeout_duration_ns),
+            log.debug("delaying {d}ms ({d},{d})", .{
+                @divFloor(timeout_duration_ns, std.time.ns_per_ms),
                 pipe.connection.replica_index,
                 pipe.connection.connection_index,
             });
@@ -265,7 +265,7 @@ const Connection = struct {
     origin_to_remote_pipe: Pipe,
     remote_to_origin_pipe: Pipe,
 
-    remote_address: ?std.net.Address = null,
+    remote_address: ?std.Io.net.IpAddress = null,
 
     accept_completion: IO.Completion = undefined,
     connect_completion: IO.Completion = undefined,
@@ -292,7 +292,7 @@ const Connection = struct {
         connection.origin_fd = fd;
 
         const remote_fd = connection.io.open_socket_tcp(
-            connection.remote_address.?.any.family,
+            std.Io.Threaded.posixAddressFamily(&connection.remote_address.?),
             tcp_options,
         ) catch |err| {
             log.warn("couldn't open socket for remote ({d},{d}): {}", .{
@@ -354,13 +354,13 @@ const Connection = struct {
                 connection.connection_index,
             });
             connection.state = .closing;
-            std.posix.shutdown(connection.origin_fd.?, .both) catch |err| switch (err) {
+            connection.io.shutdown(connection.origin_fd.?, .both) catch |err| switch (err) {
                 error.SocketNotConnected => {},
                 else => log.warn("shutdown origin_fd ({d},{d}) failed: {}", .{
                     connection.replica_index, connection.connection_index, err,
                 }),
             };
-            std.posix.shutdown(connection.remote_fd.?, .both) catch |err| switch (err) {
+            connection.io.shutdown(connection.remote_fd.?, .both) catch |err| switch (err) {
                 error.SocketNotConnected => {},
                 else => log.warn("shutdown remote_fd ({d},{d}) failed: {}", .{
                     connection.replica_index, connection.connection_index, err,
@@ -448,8 +448,8 @@ const Connection = struct {
 const Proxy = struct {
     io: *IO,
     accept_fd: std.posix.socket_t,
-    origin_address: std.net.Address, // The proxy's address.
-    remote_address: std.net.Address, // The replica's address.
+    origin_address: std.Io.net.IpAddress, // The proxy's address.
+    remote_address: std.Io.net.IpAddress, // The replica's address.
     connections: [constants.vortex.connections_count_max]Connection,
 
     fn deinit(proxy: *Proxy) void {
@@ -498,9 +498,9 @@ pub const Network = struct {
         // /proc/sys/net/ipv4/ip_local_port_range) by listening on port=0.
         // We assume that replicas' ports are from outside of that range and cannot conflict.
         for (proxies, replica_ports, 0..) |*proxy, replica_port, replica_index| {
-            const Address = std.net.Address;
-            const replica_address = Address.parseIp("127.0.0.1", replica_port) catch unreachable;
-            const listen_address = Address.parseIp("127.0.0.1", 0) catch unreachable;
+            const Address = std.Io.net.IpAddress;
+            const replica_address = Address.parseIp4("127.0.0.1", replica_port) catch unreachable;
+            const listen_address = Address.parseIp4("127.0.0.1", 0) catch unreachable;
             const listen_fd = try io.open_socket_tcp(std.posix.AF.INET, tcp_options);
             errdefer io.close_socket(listen_fd);
 

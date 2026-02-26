@@ -15,7 +15,7 @@ const log = std.log.scoped(.logged_process);
 const LoggedProcess = @This();
 
 const Options = struct {
-    stdout_behavior: std.process.Child.StdIo = .Ignore,
+    stdout_behavior: std.process.SpawnOptions.StdIo = .ignore,
 };
 
 child: std.process.Child,
@@ -29,17 +29,18 @@ pub fn spawn(
     const self = try allocator.create(LoggedProcess);
     errdefer allocator.destroy(self);
 
+    var child = try std.process.spawn(std.Options.debug_io, .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = options.stdout_behavior,
+        .stderr = .inherit,
+    });
+    errdefer child.kill(std.Options.debug_io);
+
     self.* = .{
         .state = .running,
-        .child = std.process.Child.init(argv, allocator),
+        .child = child,
     };
-
-    self.child.stdin_behavior = .Ignore;
-    self.child.stdout_behavior = options.stdout_behavior;
-    self.child.stderr_behavior = .Inherit;
-
-    try self.child.spawn();
-    errdefer _ = self.child.kill() catch {};
 
     return self;
 }
@@ -54,8 +55,9 @@ pub fn pause(
 ) !void {
     comptime assert(builtin.os.tag != .windows);
     assert(self.state == .running);
+    assert(self.child.id != null);
 
-    try std.posix.kill(self.child.id, std.posix.SIG.STOP);
+    try std.posix.kill(self.child.id.?, std.posix.SIG.STOP);
     self.state = .paused;
 }
 
@@ -64,8 +66,9 @@ pub fn unpause(
 ) !void {
     comptime assert(builtin.os.tag != .windows);
     assert(self.state == .paused);
+    assert(self.child.id != null);
 
-    try std.posix.kill(self.child.id, std.posix.SIG.CONT);
+    try std.posix.kill(self.child.id.?, std.posix.SIG.CONT);
     self.state = .running;
 }
 
@@ -79,21 +82,23 @@ pub fn terminate(
     //
     // Uses the same method as `src/testing/tmp_tigerbeetle.zig`.
     // See: https://github.com/ziglang/zig/issues/16820
+    assert(self.child.id != null);
+    const child_id = self.child.id.?;
     _ = kill: {
         if (builtin.os.tag == .windows) {
             const exit_code = 1;
-            break :kill std.os.windows.TerminateProcess(self.child.id, exit_code);
+            break :kill std.os.windows.TerminateProcess(child_id, exit_code);
         } else {
-            break :kill std.posix.kill(self.child.id, std.posix.SIG.KILL);
+            break :kill std.posix.kill(child_id, std.posix.SIG.KILL);
         }
     } catch |err| {
         log.err(
             "failed to kill process {d}: {any}\n",
-            .{ self.child.id, err },
+            .{ child_id, err },
         );
     };
 
-    const term = try self.child.wait();
+    const term = try self.child.wait(std.Options.debug_io);
     self.state = .terminated;
     return term;
 }
@@ -104,7 +109,7 @@ pub fn wait(
     self.expect_state_in(.{ .running, .terminated });
     defer self.expect_state_in(.{.terminated});
 
-    const term = try self.child.wait();
+    const term = try self.child.wait(std.Options.debug_io);
     self.state = .terminated;
     return term;
 }
@@ -113,13 +118,25 @@ pub fn wait(
 /// Otherwise, return null.
 pub fn wait_nonblocking(self: *LoggedProcess) ?std.process.Child.Term {
     self.expect_state_in(.{ .running, .paused });
+    assert(self.child.id != null);
+    const child_id = self.child.id.?;
 
-    const result = std.posix.waitpid(self.child.id, std.posix.W.NOHANG);
-    if (result.pid == 0) return null;
-    assert(result.pid == self.child.id);
+    var status: c_int = undefined;
+    while (true) {
+        const rc = std.c.waitpid(child_id, &status, std.c.W.NOHANG);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => {
+                if (rc == 0) return null;
+                assert(rc == child_id);
+                break;
+            },
+            .INTR => continue,
+            else => |err| std.debug.panic("waitpid failed: {}", .{err}),
+        }
+    }
 
     self.state = .terminated;
-    return stdx.term_from_status(result.status);
+    return stdx.term_from_status(@bitCast(status));
 }
 
 fn expect_state_in(self: *LoggedProcess, comptime valid_states: anytype) void {

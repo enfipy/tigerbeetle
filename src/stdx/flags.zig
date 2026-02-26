@@ -44,8 +44,7 @@ const assert = std.debug.assert;
 
 /// Format and print an error message to stderr, then exit with an exit code of 1.
 fn fatal(comptime fmt_string: []const u8, args: anytype) noreturn {
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("error: " ++ fmt_string ++ "\n", args) catch {};
+    std.debug.print("error: " ++ fmt_string ++ "\n", args);
     // NB: this status must match vsr.FatalReason.cli, but it would be wrong for flags to depend on
     // vsr. The right way would be to parametrize flags by this behavior, and let the caller inject
     // the implementation of fatal function, but let's be pragmatic here and just match the behavior
@@ -77,13 +76,13 @@ fn fatal(comptime fmt_string: []const u8, args: anytype) noreturn {
 /// If `pub const help` declaration is present, it is used to implement `-h/--help` argument.
 ///
 /// Value parsing can be customized on per-type basis via `parse_flag_value` customization point.
-pub fn parse(args: *std.process.ArgIterator, comptime CLIArgs: type) CLIArgs {
+pub fn parse(args: *std.process.Args.Iterator, comptime CLIArgs: type) CLIArgs {
     comptime assert(CLIArgs != void);
     assert(args.skip()); // Discard executable name.
     return parse_flags(args, CLIArgs);
 }
 
-fn parse_commands(args: *std.process.ArgIterator, comptime Commands: type) Commands {
+fn parse_commands(args: *std.process.Args.Iterator, comptime Commands: type) Commands {
     comptime assert(@typeInfo(Commands) == .@"union");
     comptime assert(std.meta.fields(Commands).len >= 2);
 
@@ -95,7 +94,7 @@ fn parse_commands(args: *std.process.ArgIterator, comptime Commands: type) Comma
     // NB: help must be declared as *pub* const to be visible here.
     if (@hasDecl(Commands, "help")) {
         if (std.mem.eql(u8, first_arg, "-h") or std.mem.eql(u8, first_arg, "--help")) {
-            std.io.getStdOut().writeAll(Commands.help) catch std.process.exit(1);
+            std.debug.print("{s}", .{Commands.help});
             std.process.exit(0);
         }
     }
@@ -109,7 +108,7 @@ fn parse_commands(args: *std.process.ArgIterator, comptime Commands: type) Comma
     fatal("unknown subcommand: '{s}'", .{first_arg});
 }
 
-fn parse_flags(args: *std.process.ArgIterator, comptime Flags: type) Flags {
+fn parse_flags(args: *std.process.Args.Iterator, comptime Flags: type) Flags {
     @setEvalBranchQuota(5_000);
 
     if (Flags == void) {
@@ -652,52 +651,56 @@ pub const main =
             ;
         };
 
-        fn main() !void {
+        fn main(process: std.process.Init) !void {
             var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+            defer assert(gpa_allocator.deinit() == .ok);
+
             const gpa = gpa_allocator.allocator();
 
-            var args = try std.process.argsWithAllocator(gpa);
+            var args = try std.process.Args.Iterator.initAllocator(process.minimal.args, gpa);
             defer args.deinit();
 
             const cli_args = parse(&args, CLIArgs);
 
-            const stdout = std.io.getStdOut();
-            const out_stream = stdout.writer();
+            var stdout_buffer: [4096]u8 = undefined;
+            var out_stream = std.Io.File.stdout().writer(std.Options.debug_io, &stdout_buffer);
+            defer out_stream.flush() catch unreachable;
+
             switch (cli_args) {
-                .empty => try out_stream.print("empty\n", .{}),
+                .empty => try out_stream.interface.print("empty\n", .{}),
                 .prefix => |values| {
-                    try out_stream.print("foo: {}\n", .{values.foo});
-                    try out_stream.print("foo-bar: {}\n", .{values.foo_bar});
-                    try out_stream.print("opt: {}\n", .{values.opt});
-                    try out_stream.print("option: {}\n", .{values.option});
+                    try out_stream.interface.print("foo: {}\n", .{values.foo});
+                    try out_stream.interface.print("foo-bar: {}\n", .{values.foo_bar});
+                    try out_stream.interface.print("opt: {}\n", .{values.opt});
+                    try out_stream.interface.print("option: {}\n", .{values.option});
                 },
                 .positional => |values| {
-                    try out_stream.print("p1: {s}\n", .{values.p1});
-                    try out_stream.print("p2: {s}\n", .{values.p2});
-                    try out_stream.print("p3: {?}\n", .{values.p3});
-                    try out_stream.print("p4: {?}\n", .{values.p4});
-                    try out_stream.print("flag: {}\n", .{values.flag});
+                    try out_stream.interface.print("p1: {s}\n", .{values.p1});
+                    try out_stream.interface.print("p2: {s}\n", .{values.p2});
+                    try out_stream.interface.print("p3: {?}\n", .{values.p3});
+                    try out_stream.interface.print("p4: {?}\n", .{values.p4});
+                    try out_stream.interface.print("flag: {}\n", .{values.flag});
                 },
                 .extended => |values| {
-                    try out_stream.print("flag: {}\n", .{values.flag});
-                    while (args.next()) |arg| try out_stream.print("arg: {s}\n", .{arg});
+                    try out_stream.interface.print("flag: {}\n", .{values.flag});
+                    while (args.next()) |arg| try out_stream.interface.print("arg: {s}\n", .{arg});
                 },
                 .required => |required| {
-                    try out_stream.print("foo: {}\n", .{required.foo});
-                    try out_stream.print("bar: {}\n", .{required.bar});
+                    try out_stream.interface.print("foo: {}\n", .{required.foo});
+                    try out_stream.interface.print("bar: {}\n", .{required.bar});
                 },
                 .values => |values| {
-                    try out_stream.print("int: {}\n", .{values.int});
-                    try out_stream.print("size: {}\n", .{values.size.bytes()});
-                    try out_stream.print("boolean: {}\n", .{values.boolean});
-                    try out_stream.print("path: {s}\n", .{values.path});
-                    try out_stream.print("optional: {?s}\n", .{values.optional});
-                    try out_stream.print("choice: {?s}\n", .{@tagName(values.choice)});
+                    try out_stream.interface.print("int: {}\n", .{values.int});
+                    try out_stream.interface.print("size: {}\n", .{values.size.bytes()});
+                    try out_stream.interface.print("boolean: {}\n", .{values.boolean});
+                    try out_stream.interface.print("path: {s}\n", .{values.path});
+                    try out_stream.interface.print("optional: {?s}\n", .{values.optional});
+                    try out_stream.interface.print("choice: {s}\n", .{@tagName(values.choice)});
                 },
                 .subcommand => |values| {
                     switch (values) {
-                        .c1 => |c1| try out_stream.print("c1.a: {}\n", .{c1.a}),
-                        .c2 => |c2| try out_stream.print("c2.b: {}\n", .{c2.b}),
+                        .c1 => |c1| try out_stream.interface.print("c1.a: {}\n", .{c1.a}),
+                        .c2 => |c2| try out_stream.interface.print("c2.b: {}\n", .{c2.b}),
                     }
                 },
             }
@@ -714,15 +717,13 @@ test "flags" {
 
         gpa: std.mem.Allocator,
         tmp_dir: std.testing.TmpDir,
-        output_buf: std.ArrayList(u8),
         flags_exe_buf: *[std.fs.max_path_bytes]u8,
         flags_exe: []const u8,
 
         fn init(gpa: std.mem.Allocator) !T {
             // TODO: Avoid std.posix.getenv() as it currently causes a linker error on windows.
             // See: https://github.com/ziglang/zig/issues/8456
-            const zig_exe = try std.process.getEnvVarOwned(gpa, "ZIG_EXE"); // Set by build.zig
-            defer gpa.free(zig_exe);
+            const zig_exe = std.mem.span(std.c.getenv("ZIG_EXE") orelse return error.MissingZigExe);
 
             var tmp_dir = std.testing.tmpDir(.{});
             errdefer tmp_dir.cleanup();
@@ -734,9 +735,6 @@ test "flags" {
             });
             defer gpa.free(tmp_dir_path);
 
-            const output_buf = std.ArrayList(u8).init(gpa);
-            errdefer output_buf.deinit();
-
             const flags_exe_buf = try gpa.create([std.fs.max_path_bytes]u8);
             errdefer gpa.destroy(flags_exe_buf);
 
@@ -747,37 +745,47 @@ test "flags" {
                 });
                 defer gpa.free(path_relative);
 
-                const this_file = try std.fs.cwd().realpath(
+                const this_file = flags_exe_buf[0..try std.Io.Dir.realPathFile(
+                    std.Io.Dir.cwd(),
+                    std.Options.debug_io,
                     path_relative,
                     flags_exe_buf,
-                );
+                )];
                 const argv = [_][]const u8{ zig_exe, "build-exe", this_file };
-                const exec_result = try std.process.Child.run(.{
-                    .allocator = gpa,
+                const run_allocator = std.heap.page_allocator;
+                const exec_result = try std.process.run(run_allocator, std.testing.io, .{
                     .argv = &argv,
-                    .cwd = tmp_dir_path,
+                    .cwd = .{ .path = tmp_dir_path },
                 });
-                defer gpa.free(exec_result.stdout);
-                defer gpa.free(exec_result.stderr);
+                defer run_allocator.free(exec_result.stdout);
+                defer run_allocator.free(exec_result.stderr);
 
-                if (exec_result.term.Exited != 0) {
+                const exited = switch (exec_result.term) {
+                    .exited => |code| code,
+                    else => 255,
+                };
+                if (exited != 0) {
                     std.debug.print("{s}{s}", .{ exec_result.stdout, exec_result.stderr });
                     return error.FailedToCompile;
                 }
             }
 
-            const flags_exe = try tmp_dir.dir.realpath(
+            const flags_exe = flags_exe_buf[0..try tmp_dir.dir.realPathFile(
+                std.Options.debug_io,
                 "flags" ++ comptime builtin.target.exeFileExt(),
                 flags_exe_buf,
-            );
+            )];
 
-            const sanity_check = try std.fs.openFileAbsolute(flags_exe, .{});
-            sanity_check.close();
+            const sanity_check = try std.Io.Dir.openFileAbsolute(
+                std.Options.debug_io,
+                flags_exe,
+                .{},
+            );
+            sanity_check.close(std.Options.debug_io);
 
             return .{
                 .gpa = gpa,
                 .tmp_dir = tmp_dir,
-                .output_buf = output_buf,
                 .flags_exe_buf = flags_exe_buf,
                 .flags_exe = flags_exe,
             };
@@ -785,7 +793,6 @@ test "flags" {
 
         fn deinit(t: *T) void {
             t.gpa.destroy(t.flags_exe_buf);
-            t.output_buf.deinit();
             t.tmp_dir.cleanup();
             t.* = undefined;
         }
@@ -802,26 +809,31 @@ test "flags" {
                 assert(argv[argv.len - 1].ptr == cli[cli.len - 1].ptr);
             }
 
-            const exec_result = try std.process.Child.run(.{
-                .allocator = t.gpa,
+            const run_allocator = std.heap.page_allocator;
+            const exec_result = try std.process.run(run_allocator, std.testing.io, .{
                 .argv = argv,
             });
-            defer t.gpa.free(exec_result.stdout);
-            defer t.gpa.free(exec_result.stderr);
+            defer run_allocator.free(exec_result.stdout);
+            defer run_allocator.free(exec_result.stderr);
 
-            t.output_buf.clearRetainingCapacity();
+            var output_writer_allocating: std.Io.Writer.Allocating = .init(t.gpa);
+            defer output_writer_allocating.deinit();
 
-            if (exec_result.term.Exited != 0) {
-                try t.output_buf.writer().print("status: {}\n", .{exec_result.term.Exited});
+            const status = switch (exec_result.term) {
+                .exited => |code| code,
+                else => 255,
+            };
+            if (status != 0) {
+                try output_writer_allocating.writer.print("status: {}\n", .{status});
             }
             if (exec_result.stdout.len > 0) {
-                try t.output_buf.writer().print("stdout:\n{s}", .{exec_result.stdout});
+                try output_writer_allocating.writer.print("stdout:\n{s}", .{exec_result.stdout});
             }
             if (exec_result.stderr.len > 0) {
-                try t.output_buf.writer().print("stderr:\n{s}", .{exec_result.stderr});
+                try output_writer_allocating.writer.print("stderr:\n{s}", .{exec_result.stderr});
             }
 
-            try want.diff(t.output_buf.items);
+            try want.diff(output_writer_allocating.writer.buffered());
         }
     };
 
@@ -844,13 +856,13 @@ test "flags" {
     ));
 
     try t.check(&.{"-h"}, snap(@src(),
-        \\stdout:
+        \\stderr:
         \\ flags-test-program [flags]
         \\
     ));
 
     try t.check(&.{"--help"}, snap(@src(),
-        \\stdout:
+        \\stderr:
         \\ flags-test-program [flags]
         \\
     ));
@@ -1354,12 +1366,12 @@ test "flags" {
         \\
     ));
     try t.check(&.{ "subcommand", "--help" }, snap(@src(),
-        \\stdout:
+        \\stderr:
         \\subcommand help
         \\
     ));
     try t.check(&.{ "subcommand", "-h" }, snap(@src(),
-        \\stdout:
+        \\stderr:
         \\subcommand help
         \\
     ));

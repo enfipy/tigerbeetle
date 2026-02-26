@@ -98,6 +98,44 @@ fn open_memory_file(name: [*:0]const u8) posix.fd_t {
     return @intCast(os.linux.memfd_create(name, mfd_cloexec));
 }
 
+fn fd_pwrite_all(fd: posix.fd_t, buffer: []const u8, offset: u64) !void {
+    var bytes_written: usize = 0;
+    while (bytes_written < buffer.len) {
+        const offset_n: posix.off_t = @intCast(offset + bytes_written);
+        const rc = std.c.pwrite(
+            fd,
+            buffer[bytes_written..].ptr,
+            buffer.len - bytes_written,
+            offset_n,
+        );
+        const n = switch (posix.errno(rc)) {
+            .SUCCESS => @as(usize, @intCast(rc)),
+            .INTR => continue,
+            .NOSPC => return error.NoSpaceLeft,
+            .FBIG => return error.FileTooBig,
+            else => |err| return stdx.unexpected_errno("pwrite", err),
+        };
+        if (n == 0) return error.NoSpaceLeft;
+        bytes_written += n;
+    }
+}
+
+fn fd_pread_all(fd: posix.fd_t, buffer: []u8, offset: u64) !usize {
+    var bytes_read: usize = 0;
+    while (bytes_read < buffer.len) {
+        const offset_n: posix.off_t = @intCast(offset + bytes_read);
+        const rc = std.c.pread(fd, buffer[bytes_read..].ptr, buffer.len - bytes_read, offset_n);
+        const n = switch (posix.errno(rc)) {
+            .SUCCESS => @as(usize, @intCast(rc)),
+            .INTR => continue,
+            else => |err| return stdx.unexpected_errno("pread", err),
+        };
+        if (n == 0) break;
+        bytes_read += n;
+    }
+    return bytes_read;
+}
+
 // TODO(zig): std doesn't have execveat.
 // Once that's available, this can be removed.
 fn execveat(
@@ -211,12 +249,8 @@ pub const Release = extern struct {
 
     pub fn format(
         release: Release,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
         const release_triple = release.triple();
         return writer.print("{}.{}.{}", .{
             release_triple.major,
@@ -703,6 +737,7 @@ pub const MultiversionOS = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        process: std.process.Init.Minimal,
         io: *IO,
         exe_path: [:0]const u8,
         exe_path_format: enum { detect, native },
@@ -724,7 +759,7 @@ pub const MultiversionOS = struct {
         // This does impact memory usage.
         const source_buffer = try allocator.alignedAlloc(
             u8,
-            8,
+            .@"8",
             multiversion_binary_size_max_by_format,
         );
         errdefer allocator.free(source_buffer);
@@ -755,7 +790,7 @@ pub const MultiversionOS = struct {
         const target_fd: posix.fd_t = switch (builtin.target.os.tag) {
             .linux => blk: {
                 const fd = open_memory_file(target_path);
-                errdefer posix.close(fd);
+                errdefer _ = std.c.close(fd);
 
                 try posix.ftruncate(fd, multiversion_binary_size_max_by_format);
 
@@ -763,22 +798,29 @@ pub const MultiversionOS = struct {
             },
 
             .macos, .windows => blk: {
-                const mode = if (builtin.target.os.tag == .macos) 0o777 else 0;
-                const file = std.fs.createFileAbsolute(
+                const file = std.Io.Dir.createFileAbsolute(
+                    std.Options.debug_io,
                     target_path,
-                    .{ .read = true, .truncate = true, .mode = mode },
+                    .{
+                        .read = true,
+                        .truncate = true,
+                        .permissions = if (builtin.target.os.tag == .macos)
+                            .executable_file
+                        else
+                            .default_file,
+                    },
                 ) catch |e| std.debug.panic(
                     "error in target_fd open: {}",
                     .{e},
                 );
-                try file.setEndPos(multiversion_binary_size_max);
+                try file.setLength(std.Options.debug_io, multiversion_binary_size_max);
 
                 break :blk file.handle;
             },
 
             else => @panic("unsupported platform"),
         };
-        errdefer posix.close(target_fd);
+        errdefer _ = std.c.close(target_fd);
 
         const args_envp: ArgsEnvp = switch (builtin.target.os.tag) {
             .linux, .macos => blk: {
@@ -788,17 +830,24 @@ pub const MultiversionOS = struct {
                 //
                 // For args, modify them so that argv[0] is exe_path. This allows our memfd executed
                 // binary to find its way back to the real file on disk.
-                const args = try allocator.allocSentinel(?[*:0]const u8, os.argv.len, null);
+                const args = try allocator.allocSentinel(
+                    ?[*:0]const u8,
+                    process.args.vector.len,
+                    null,
+                );
                 errdefer allocator.free(args);
 
                 args[0] = try allocator.dupeZ(u8, exe_path);
                 errdefer allocator.free(args[0]);
 
-                for (1..os.argv.len) |i| args[i] = os.argv[i];
+                for (1..process.args.vector.len) |i| args[i] = process.args.vector[i];
 
                 break :blk .{
                     .args = args,
-                    .envp = @as([*:null]const ?[*:0]const u8, @ptrCast(os.environ.ptr)),
+                    .envp = @as(
+                        [*:null]const ?[*:0]const u8,
+                        @ptrCast(process.environ.block.slice.ptr),
+                    ),
                 };
             },
 
@@ -840,7 +889,7 @@ pub const MultiversionOS = struct {
     }
 
     pub fn deinit(self: *MultiversionOS, allocator: std.mem.Allocator) void {
-        posix.close(self.target_fd);
+        _ = std.c.close(self.target_fd);
         self.target_fd = IO.INVALID_FILE;
         allocator.free(self.target_path);
 
@@ -1025,8 +1074,11 @@ pub const MultiversionOS = struct {
                 0,
             ),
             .macos, .windows => {
-                const file = std.fs.openFileAbsolute(self.exe_path, .{}) catch |e|
-                    std.debug.panic("error in binary_open: {}", .{e});
+                const file = std.Io.Dir.openFileAbsolute(
+                    std.Options.debug_io,
+                    self.exe_path,
+                    .{},
+                ) catch |e| std.debug.panic("error in binary_open: {}", .{e});
                 self.binary_open_callback(&self.completion, file.handle);
             },
             else => @panic("unsupported platform"),
@@ -1085,7 +1137,7 @@ pub const MultiversionOS = struct {
                 assert(self.source_fd != null);
                 assert(self.source_offset != null);
 
-                posix.close(self.source_fd.?);
+                _ = std.c.close(self.source_fd.?);
                 self.source_offset = null;
                 self.source_fd = null;
             }
@@ -1215,8 +1267,7 @@ pub const MultiversionOS = struct {
         errdefer log.warn("target binary update failed - " ++
             "this replica might fail to automatically restart!", .{});
 
-        const target_file = std.fs.File{ .handle = self.target_fd };
-        try target_file.pwriteAll(source_buffer, 0);
+        try fd_pwrite_all(self.target_fd, source_buffer, 0);
 
         self.target_header = header;
         self.target_body_offset = active.body_offset;
@@ -1357,26 +1408,29 @@ pub const MultiversionOS = struct {
         const binary_size = header.past.sizes[index];
         const binary_checksum = header.past.checksums[index];
 
-        const target_file = std.fs.File{ .handle = self.target_fd };
-
         // Our target release is physically embedded in the binary. Shuffle the bytes
         // around, so that it's at the start, then truncate the descriptor so there's nothing
         // trailing.
-        const bytes_read = try target_file.preadAll(
+        const bytes_read = try fd_pread_all(
+            self.target_fd,
             self.source_buffer[0..binary_size],
             self.target_body_offset.? + binary_offset,
         );
         assert(bytes_read == binary_size);
 
-        try target_file.pwriteAll(self.source_buffer[0..binary_size], 0);
+        try fd_pwrite_all(self.target_fd, self.source_buffer[0..binary_size], 0);
 
         // Zero the remaining bytes in the file.
-        try posix.ftruncate(self.target_fd, binary_size);
+        switch (posix.errno(std.c.ftruncate(self.target_fd, @intCast(binary_size)))) {
+            .SUCCESS => {},
+            else => |err| return stdx.unexpected_errno("ftruncate", err),
+        }
 
         // Ensure the checksum matches the header. This could have been done above, but
         // do it in a separate step to make sure.
         const written_checksum = blk: {
-            const bytes_read_for_checksum = try target_file.preadAll(
+            const bytes_read_for_checksum = try fd_pread_all(
+                self.target_fd,
                 self.source_buffer[0..binary_size],
                 0,
             );
@@ -1411,9 +1465,9 @@ pub const MultiversionOS = struct {
                 }
             },
             .macos => {
-                std.posix.execveZ(self.target_path, self.args_envp.args, self.args_envp.envp) catch
+                if (std.c.execve(self.target_path, self.args_envp.args, self.args_envp.envp) != 0) {
                     return error.ExecveZFailed;
-
+                }
                 unreachable;
             },
             .windows => {
@@ -1433,7 +1487,7 @@ pub const MultiversionOS = struct {
                 var lp_process_information: std.os.windows.PROCESS_INFORMATION = undefined;
 
                 // Close the handle before trying to execute.
-                posix.close(self.target_fd);
+                _ = std.c.close(self.target_fd);
 
                 const pipe_name: [*:0]const u16 =
                     std.unicode.utf8ToUtf16LeStringLiteral("\\\\.\\pipe\\") ++ random_wstr();
@@ -1520,7 +1574,10 @@ pub const MultiversionOS = struct {
     }
 };
 
-pub fn self_exe_path(allocator: std.mem.Allocator) ![:0]const u8 {
+pub fn self_exe_path(
+    allocator: std.mem.Allocator,
+    process: std.process.Init.Minimal,
+) ![:0]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
 
     if (builtin.target.os.tag == .windows) {
@@ -1536,7 +1593,7 @@ pub fn self_exe_path(allocator: std.mem.Allocator) ![:0]const u8 {
         }
     }
 
-    const native_self_exe_path = try std.fs.selfExePath(&buf);
+    const native_self_exe_path = buf[0..try std.process.executablePath(std.Options.debug_io, &buf)];
 
     if (builtin.target.os.tag == .linux and
         std.mem.eql(u8, native_self_exe_path, "/memfd:" ++ multiversion_uuid ++ " (deleted)"))
@@ -1544,10 +1601,15 @@ pub fn self_exe_path(allocator: std.mem.Allocator) ![:0]const u8 {
         comptime assert(builtin.target.os.tag == .linux);
         // Technically, "/memfd:tigerbeetle-multiversion-... (deleted)" is a valid path at which you
         // could place your binary - please don't!
-        assert(std.fs.cwd().statFile(native_self_exe_path) catch null == null);
+        assert(std.Io.Dir.statFile(
+            std.Io.Dir.cwd(),
+            std.Options.debug_io,
+            native_self_exe_path,
+            .{},
+        ) catch null == null);
 
         // Running from a memfd already; the real path is argv[0].
-        const path = try allocator.dupeZ(u8, std.mem.span(os.argv[0]));
+        const path = try process_arg0(allocator, process);
         assert(std.fs.path.isAbsolute(path));
 
         return path;
@@ -1561,7 +1623,7 @@ pub fn self_exe_path(allocator: std.mem.Allocator) ![:0]const u8 {
         // it's not possible to assert this.
 
         // Running from a temp path already; the real path is argv[0].
-        const path = try allocator.dupeZ(u8, std.mem.span(os.argv[0]));
+        const path = try process_arg0(allocator, process);
         assert(std.fs.path.isAbsolute(path));
 
         return path;
@@ -1585,6 +1647,14 @@ pub fn self_exe_path(allocator: std.mem.Allocator) ![:0]const u8 {
 
     // Not running from a memfd or temp path. `native_self_exe_path` is the real path.
     return try allocator.dupeZ(u8, native_self_exe_path);
+}
+
+fn process_arg0(allocator: std.mem.Allocator, process: std.process.Init.Minimal) ![:0]u8 {
+    var arg_iterator = try process.args.iterateAllocator(allocator);
+    defer arg_iterator.deinit();
+
+    const arg0 = arg_iterator.next() orelse return error.MissingArg0;
+    return try allocator.dupeZ(u8, arg0);
 }
 
 pub fn random_wstr() [32]u16 {
@@ -1689,17 +1759,19 @@ const HeaderBodyOffsets = struct {
 /// like bounds checking on slices.
 pub fn parse_elf(buffer: []align(@alignOf(elf.Elf64_Ehdr)) const u8) !HeaderBodyOffsets {
     if (@sizeOf(elf.Elf64_Ehdr) > buffer.len) return error.InvalidELF;
-    const elf_header = try elf.Header.parse(buffer[0..@sizeOf(elf.Elf64_Ehdr)]);
-
-    // TigerBeetle only supports little endian on 64 bit platforms.
-    if (elf_header.endian != .little) return error.WrongEndian;
-    if (!elf_header.is_64) return error.Not64bit;
+    const elf_header = std.mem.bytesAsValue(
+        elf.Elf64_Ehdr,
+        buffer[0..@sizeOf(elf.Elf64_Ehdr)],
+    );
+    if (!std.mem.eql(u8, elf_header.e_ident[0..4], elf.MAGIC)) return error.InvalidELF;
+    if (elf_header.e_ident[elf.EI.CLASS] != elf.ELFCLASS64) return error.Not64bit;
+    if (elf_header.e_ident[elf.EI.DATA] != elf.ELFDATA2LSB) return error.WrongEndian;
 
     // Map to some non-abbreviated names to make understanding ELF a little bit easier. Later on,
     // when sh_* names are used, they refer to `section header ...`.
-    const elf_section_headers_offset = elf_header.shoff;
-    const elf_section_headers_count = elf_header.shnum;
-    const string_table_section_header_index = elf_header.shstrndx;
+    const elf_section_headers_offset = elf_header.e_shoff;
+    const elf_section_headers_count = elf_header.e_shnum;
+    const string_table_section_header_index = elf_header.e_shstrndx;
 
     // Only support "simple" ELF string tables.
     if (string_table_section_header_index >= elf.SHN_LORESERVE) return error.LongStringTable;
@@ -1810,7 +1882,14 @@ pub fn parse_elf(buffer: []align(@alignOf(elf.Elf64_Ehdr)) const u8) !HeaderBody
         .body_size = body_size.?,
     };
 
-    return switch (elf_header.machine) {
+    const elf_machine_raw: u16 = switch (@typeInfo(@TypeOf(elf_header.e_machine))) {
+        .int => elf_header.e_machine,
+        .@"enum" => @intFromEnum(elf_header.e_machine),
+        else => comptime unreachable,
+    };
+    const elf_machine = std.enums.fromInt(elf.EM, elf_machine_raw) orelse
+        return error.UnknownArchitecture;
+    return switch (elf_machine) {
         .AARCH64 => .{ .format = .elf, .aarch64 = offsets, .x86_64 = null },
         .X86_64 => .{ .format = .elf, .aarch64 = null, .x86_64 = offsets },
         else => error.UnknownArchitecture,
@@ -1920,9 +1999,9 @@ pub fn parse_pe(buffer: []const u8) !HeaderBodyOffsets {
         .body_size = body_size,
     };
 
-    return switch (coff.getCoffHeader().machine) {
+    return switch (coff.getHeader().machine) {
         .ARM64 => .{ .format = .pe, .aarch64 = offsets, .x86_64 = null },
-        .X64 => .{ .format = .pe, .aarch64 = null, .x86_64 = offsets },
+        .AMD64 => .{ .format = .pe, .aarch64 = null, .x86_64 = offsets },
         else => error.UnknownArchitecture,
     };
 }
@@ -2064,13 +2143,19 @@ test parse_elf {
 
 pub fn print_information(
     gpa: std.mem.Allocator,
+    process: std.process.Init.Minimal,
     exe_path: []const u8,
-    output: std.io.AnyWriter,
+    output: *std.Io.Writer,
 ) !void {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    const absolute_exe_path = try std.fs.cwd().realpathAlloc(gpa, exe_path);
+    const absolute_exe_path = try std.Io.Dir.realPathFileAlloc(
+        std.Io.Dir.cwd(),
+        std.Options.debug_io,
+        exe_path,
+        gpa,
+    );
     defer gpa.free(absolute_exe_path);
 
     const absolute_exe_path_z = try gpa.dupeZ(u8, absolute_exe_path);
@@ -2078,6 +2163,7 @@ pub fn print_information(
 
     var multiversion = try MultiversionOS.init(
         gpa,
+        process,
         &io,
         absolute_exe_path_z,
         .detect,
@@ -2117,7 +2203,7 @@ pub fn print_information(
             .current_git_commit => {
                 try output.print("multiversioning.header.{s}={s}\n", .{
                     field_name,
-                    std.fmt.fmtSliceHexLower(&header.current_git_commit),
+                    std.fmt.bytesToHex(header.current_git_commit, .lower),
                 });
             },
             .current_release, .current_release_client_min => {
@@ -2161,10 +2247,10 @@ pub fn print_information(
             },
             .git_commits => {
                 for (@field(header.past, field_name)[0..header.past.count], 0..) |*git_commit, i| {
-                    try output.print("multiversioning.header.past.{s}.{}={}\n", .{
+                    try output.print("multiversioning.header.past.{s}.{}={s}\n", .{
                         field_name,
                         Release{ .value = header.past.releases[i] },
-                        std.fmt.fmtSliceHexLower(git_commit),
+                        std.fmt.bytesToHex(git_commit.*, .lower),
                     });
                 }
             },
@@ -2181,13 +2267,19 @@ pub fn print_information(
 /// This is not exhaustive, but should be good enough for 99.95% of the modern systems we support.
 /// Caller owns returned memory.
 fn system_temporary_directory(allocator: std.mem.Allocator) ![]const u8 {
+    const process_environ = if (std.Options.debug_threaded_io) |threaded|
+        threaded.environ.process_environ
+    else
+        std.process.Environ.empty;
+
     switch (builtin.os.tag) {
         .linux, .macos => {
-            return std.process.getEnvVarOwned(allocator, "TMPDIR") catch allocator.dupe(u8, "/tmp");
+            return std.process.Environ.getAlloc(process_environ, allocator, "TMPDIR") catch
+                allocator.dupe(u8, "/tmp");
         },
         .windows => {
-            return std.process.getEnvVarOwned(allocator, "TMP") catch
-                std.process.getEnvVarOwned(allocator, "TEMP") catch
+            return std.process.Environ.getAlloc(process_environ, allocator, "TMP") catch
+                std.process.Environ.getAlloc(process_environ, allocator, "TEMP") catch
                 allocator.dupe(u8, "C:\\Windows\\Temp");
         },
         else => @panic("unsupported platform"),

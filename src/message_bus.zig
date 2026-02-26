@@ -91,7 +91,7 @@ pub fn MessageBusType(comptime IO: type) type {
             trace: ?*Tracer,
             clients_limit: ?u32 = null,
         };
-        const Address = std.net.Address;
+        const Address = std.Io.net.IpAddress;
         const MessageBus = @This();
 
         /// Initialize the MessageBus for the given configuration and replica/client process.
@@ -249,7 +249,11 @@ pub fn MessageBusType(comptime IO: type) type {
             assert(bus.accept_address == null);
 
             const address = bus.replicas_addresses[bus.process.replica];
-            const fd = try init_tcp(bus.io, .replica, address.any.family);
+            const fd = try init_tcp(
+                bus.io,
+                .replica,
+                @intCast(std.Io.Threaded.posixAddressFamily(&address)),
+            );
             errdefer bus.io.close_socket(fd);
 
             const accept_address = try bus.io.listen(fd, address, .{
@@ -443,7 +447,8 @@ pub fn MessageBusType(comptime IO: type) type {
             assert(connection.state == .free);
             assert(connection.fd == null);
 
-            const family = bus.replicas_addresses[replica].any.family;
+            const address = bus.replicas_addresses[replica];
+            const family = @as(u32, @intCast(std.Io.Threaded.posixAddressFamily(&address)));
             connection.fd = init_tcp(bus.io, bus.process, family) catch |err| {
                 log.err("{}: connect_to_replica: init_tcp error={s}", .{
                     bus.id,

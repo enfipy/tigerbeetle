@@ -1204,7 +1204,7 @@ const SeedRecord = struct {
     }
 
     fn to_json(arena: std.mem.Allocator, records: []const SeedRecord) ![]const u8 {
-        return try std.json.stringifyAlloc(arena, records, .{
+        return try std.json.Stringify.valueAlloc(arena, records, .{
             .emit_null_optional_fields = false, // Omit `"debug: ""`.
             .whitespace = .indent_2,
         });
@@ -1230,7 +1230,7 @@ const SeedRecord = struct {
         }
         std.mem.sort(SeedRecord, current_and_new, release_latest, SeedRecord.less_than);
 
-        var result = try std.ArrayList(SeedRecord).initCapacity(arena, current.len);
+        var result = try std.array_list.Managed(SeedRecord).initCapacity(arena, current.len);
 
         var commit_sha_previous: ?[40]u8 = null;
         var commit_count: u32 = 0;
@@ -1292,7 +1292,11 @@ const SeedRecord = struct {
 };
 
 fn create_log_path(arena: std.mem.Allocator) ![]const u8 {
-    const name = std.crypto.random.int(u128);
+    const name = name: {
+        var bytes: [16]u8 = undefined;
+        std.Options.debug_io.random(&bytes);
+        break :name std.mem.readInt(u128, &bytes, .little);
+    };
     return std.fmt.allocPrint(arena, "./fuzzing/logs/{x:0>32}.vopr", .{name});
 }
 

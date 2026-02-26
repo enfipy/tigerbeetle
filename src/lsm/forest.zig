@@ -52,23 +52,9 @@ pub fn ForestType(comptime _Storage: type, comptime groove_cfg: anytype) type {
         };
     }
 
-    const _Grooves = @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = &groove_fields,
-            .decls = &.{},
-            .is_tuple = false,
-        },
-    });
+    const _Grooves = stdx.StructFromFieldsType(&groove_fields);
 
-    const _GroovesOptions = @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = &groove_options_fields,
-            .decls = &.{},
-            .is_tuple = false,
-        },
-    });
+    const _GroovesOptions = stdx.StructFromFieldsType(&groove_options_fields);
 
     {
         // Verify that every tree id is unique.
@@ -161,12 +147,7 @@ pub fn ForestType(comptime _Storage: type, comptime groove_cfg: anytype) type {
                 .value = tree_info.tree_id,
             };
         }
-        break :tree_id @Type(.{ .@"enum" = .{
-            .tag_type = u16,
-            .fields = &fields,
-            .decls = &.{},
-            .is_exhaustive = true,
-        } });
+        break :tree_id stdx.EnumFromFieldsType(u16, &fields, true);
     };
 
     comptime {

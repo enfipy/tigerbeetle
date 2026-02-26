@@ -240,14 +240,14 @@ test "repl integration" {
 test "benchmark/inspect smoke" {
     const data_file = data_file: {
         var random_bytes: [4]u8 = undefined;
-        std.crypto.random.bytes(&random_bytes);
+        std.Options.debug_io.random(&random_bytes);
         const random_suffix: [8]u8 = std.fmt.bytesToHex(random_bytes, .lower);
         break :data_file "0_0-" ++ random_suffix ++ ".tigerbeetle.benchmark";
     };
-    defer std.fs.cwd().deleteFile(data_file) catch {};
+    defer std.Io.Dir.deleteFile(std.Io.Dir.cwd(), std.Options.debug_io, data_file) catch {};
 
     const trace_file = data_file ++ ".json";
-    defer std.fs.cwd().deleteFile(trace_file) catch {};
+    defer std.Io.Dir.deleteFile(std.Io.Dir.cwd(), std.Options.debug_io, trace_file) catch {};
 
     const shell = try Shell.create(std.testing.allocator);
     defer shell.destroy();
@@ -308,28 +308,37 @@ test "benchmark/inspect smoke" {
     );
 
     {
-        const file = try std.fs.cwd().openFile(data_file, .{ .mode = .read_write });
-        defer file.close();
+        const file = try std.Io.Dir.cwd().openFile(std.Options.debug_io, data_file, .{
+            .mode = .read_write,
+        });
+        defer file.close(std.Options.debug_io);
 
         var prng = stdx.PRNG.from_seed_testing();
         var random_bytes: [256]u8 = undefined;
         prng.fill(&random_bytes);
 
-        try file.pwriteAll(&random_bytes, offset);
+        try file.writePositionalAll(std.Options.debug_io, &random_bytes, offset);
     }
 
     // `shell.exec` assumes that success is a zero exit code; but in this case the test expects
     // corruption to be found and wants to assert a non-zero exit code.
-    var child = std.process.Child.init(
-        &.{ tigerbeetle, "inspect", "integrity", data_file },
-        std.testing.allocator,
-    );
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
+    var process_threaded = std.Io.Threaded.init(std.testing.allocator, .{
+        .environ = if (std.Options.debug_threaded_io) |threaded|
+            threaded.environ.process_environ
+        else
+            std.process.Environ.empty,
+    });
+    defer process_threaded.deinit();
 
-    const term = try child.spawnAndWait();
+    var child = try std.process.spawn(process_threaded.ioBasic(), .{
+        .argv = &.{ tigerbeetle, "inspect", "integrity", data_file },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    const term = try child.wait(process_threaded.ioBasic());
     switch (term) {
-        .Exited, .Signal => |value| try std.testing.expect(value != 0),
+        .exited => |code| try std.testing.expect(code != 0),
+        .signal => {},
         else => unreachable,
     }
 }
@@ -346,7 +355,13 @@ test "help/version smoke" {
         .{ .command = "{tigerbeetle} version", .substring = "TigerBeetle version" },
         .{ .command = "{tigerbeetle} version --verbose", .substring = "process.backoff_max_ms=" },
     }) |check| {
-        const output = try shell.exec_stdout(check.command, .{ .tigerbeetle = tigerbeetle });
+        const result = try shell.exec_raw(check.command, .{ .tigerbeetle = tigerbeetle });
+        switch (result.term) {
+            .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+            else => return error.TestUnexpectedResult,
+        }
+
+        const output = if (result.stdout.len > 0) result.stdout else result.stderr;
         try std.testing.expect(output.len > 0);
         try std.testing.expect(std.mem.indexOf(u8, output, check.substring) != null);
     }
@@ -389,7 +404,7 @@ test "in-place upgrade" {
     }
 
     for (0..ticks_max) |tick| {
-        std.time.sleep(2 * std.time.ns_per_s);
+        try std.Io.sleep(std.Options.debug_io, .{ .nanoseconds = 2 * std.time.ns_per_s }, .awake);
 
         for (0..replica_count) |replica_index| {
             if (tick == upgrade_tick[replica_index]) {
@@ -440,7 +455,7 @@ test "recover smoke" {
     try cluster.replica_spawn(0);
     try cluster.replica_spawn(1);
     try cluster.replica_spawn(2);
-    std.time.sleep(2 * std.time.ns_per_s);
+    try std.Io.sleep(std.Options.debug_io, .{ .nanoseconds = 2 * std.time.ns_per_s }, .awake);
 
     try cluster.replica_kill(2);
     try cluster.replica_reformat(2);
@@ -485,10 +500,15 @@ const TmpCluster = struct {
         const shell = try Shell.create(std.testing.allocator);
         errdefer shell.destroy();
 
-        const tmp = try shell.fmt("./.zig-cache/tmp/{}", .{std.crypto.random.int(u64)});
-        errdefer shell.cwd.deleteTree(tmp) catch {};
+        var random_bytes: [8]u8 = undefined;
+        std.Options.debug_io.random(&random_bytes);
+        const tmp = try shell.fmt(
+            "./.zig-cache/tmp/{}",
+            .{std.mem.readInt(u64, &random_bytes, .little)},
+        );
+        errdefer shell.cwd.deleteTree(std.Options.debug_io, tmp) catch {};
 
-        try shell.cwd.makePath(tmp);
+        try std.Io.Dir.createDirPath(shell.cwd, std.Options.debug_io, tmp);
 
         var replica_exe: [replica_count][]const u8 = @splat("");
         var replica_datafile: [replica_count][]const u8 = @splat("");
@@ -523,11 +543,11 @@ const TmpCluster = struct {
 
         for (&cluster.replicas) |*replica| {
             if (replica.*) |*alive| {
-                _ = alive.kill() catch {};
+                alive.kill(std.Options.debug_io);
             }
         }
 
-        cluster.shell.cwd.deleteTree(cluster.tmp) catch {};
+        cluster.shell.cwd.deleteTree(std.Options.debug_io, cluster.tmp) catch {};
         cluster.shell.destroy();
         cluster.* = undefined;
     }
@@ -545,6 +565,7 @@ const TmpCluster = struct {
             },
             cluster.shell.cwd,
             destination,
+            std.Options.debug_io,
             .{},
         );
         try cluster.shell.file_make_executable(destination);
@@ -565,7 +586,10 @@ const TmpCluster = struct {
     fn replica_reformat(cluster: *TmpCluster, replica_index: usize) !void {
         assert(cluster.replicas[replica_index] == null);
 
-        cluster.shell.cwd.deleteFile(cluster.replica_datafile[replica_index]) catch {};
+        cluster.shell.cwd.deleteFile(
+            std.Options.debug_io,
+            cluster.replica_datafile[replica_index],
+        ) catch {};
 
         try cluster.shell.exec(
             \\{tigerbeetle} recover
@@ -593,7 +617,10 @@ const TmpCluster = struct {
             assert(cluster.replicas[replica_index] == null);
         }
 
-        cluster.shell.cwd.deleteFile(cluster.replica_exe[replica_index]) catch {};
+        cluster.shell.cwd.deleteFile(
+            std.Options.debug_io,
+            cluster.replica_exe[replica_index],
+        ) catch {};
         try cluster.replica_install(replica_index, .current);
         cluster.replica_upgraded[replica_index] = true;
 
@@ -617,7 +644,7 @@ const TmpCluster = struct {
 
     fn replica_kill(cluster: *TmpCluster, replica_index: usize) !void {
         assert(cluster.replicas[replica_index] != null);
-        _ = cluster.replicas[replica_index].?.kill() catch {};
+        cluster.replicas[replica_index].?.kill(std.Options.debug_io);
         cluster.replicas[replica_index] = null;
     }
 
@@ -638,6 +665,8 @@ const TmpCluster = struct {
             ) !void {
                 const shell = try Shell.create(std.testing.allocator);
                 defer shell.destroy();
+
+                try shell.file_make_executable(tigerbeetle_path);
 
                 try shell.exec_options(.{ .timeout = .minutes(10) },
                     \\{tigerbeetle} benchmark

@@ -581,7 +581,7 @@ pub const IO = struct {
                     completion.callback(completion.context, completion, &result);
                 },
                 .fsync => {
-                    const result: anyerror!void = blk: {
+                    const result: FsyncError!void = blk: {
                         if (completion.result < 0) {
                             const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
                                 .INTR => {
@@ -827,7 +827,7 @@ pub const IO = struct {
         },
         connect: struct {
             socket: socket_t,
-            address: std.net.Address,
+            address: std.Io.net.IpAddress,
         },
         fsync: struct {
             fd: fd_t,
@@ -973,7 +973,7 @@ pub const IO = struct {
         ) void,
         completion: *Completion,
         socket: socket_t,
-        address: std.net.Address,
+        address: std.Io.net.IpAddress,
     ) void {
         completion.* = .{
             .io = self,
@@ -1427,9 +1427,9 @@ pub const IO = struct {
     pub fn listen(
         _: *IO,
         fd: socket_t,
-        address: std.net.Address,
+        address: std.Io.net.IpAddress,
         options: ListenOptions,
-    ) !std.net.Address {
+    ) !std.Io.net.IpAddress {
         return common.listen(fd, address, options);
     }
 
@@ -1822,9 +1822,13 @@ pub const IO = struct {
         }
     }
 
-    pub const PReadError = posix.PReadError;
+    pub const PReadError = common.AOFBlockingPReadError;
 
-    pub fn aof_blocking_write_all(_: *IO, fd: fd_t, buffer: []const u8) posix.WriteError!void {
+    pub fn aof_blocking_write_all(
+        _: *IO,
+        fd: fd_t,
+        buffer: []const u8,
+    ) common.AOFBlockingWriteError!void {
         return common.aof_blocking_write_all(fd, buffer);
     }
 
@@ -1836,11 +1840,17 @@ pub const IO = struct {
         return common.aof_blocking_close(fd);
     }
 
-    pub fn aof_blocking_stat(_: *IO, path: []const u8) std.fs.Dir.StatFileError!std.fs.File.Stat {
+    pub fn aof_blocking_stat(
+        _: *IO,
+        path: []const u8,
+    ) common.AOFBlockingStatError!std.Io.File.Stat {
         return common.aof_blocking_stat(path);
     }
 
-    pub fn aof_blocking_fstat(_: *IO, fd: fd_t) std.fs.Dir.StatError!std.fs.File.Stat {
+    pub fn aof_blocking_fstat(
+        _: *IO,
+        fd: fd_t,
+    ) common.AOFBlockingFStatError!std.Io.File.Stat {
         return common.aof_blocking_fstat(fd);
     }
 

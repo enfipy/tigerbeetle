@@ -135,10 +135,8 @@ pub const TimeOS = struct {
         //
         // For more detail and why CLOCK_MONOTONIC_RAW is even worse than CLOCK_MONOTONIC, see
         // https://github.com/ziglang/zig/pull/933#discussion_r656021295.
-        const ts: posix.timespec = posix.clock_gettime(posix.CLOCK.BOOTTIME) catch {
-            @panic("CLOCK_BOOTTIME required");
-        };
-        return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+        const ts = std.Io.Timestamp.now(std.Options.debug_io, .boot);
+        return @as(u64, @intCast(ts.toNanoseconds()));
     }
 
     fn realtime(_: *anyopaque) i64 {
@@ -165,8 +163,8 @@ pub const TimeOS = struct {
 
     fn realtime_unix() i64 {
         assert(is_darwin or is_linux);
-        const ts: posix.timespec = posix.clock_gettime(posix.CLOCK.REALTIME) catch unreachable;
-        return @as(i64, ts.sec) * std.time.ns_per_s + ts.nsec;
+        const ts = std.Io.Timestamp.now(std.Options.debug_io, .real);
+        return @as(i64, @intCast(ts.toNanoseconds()));
     }
 
     fn tick(_: *anyopaque) void {}

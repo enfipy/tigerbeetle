@@ -176,7 +176,7 @@ pub fn SetAssociativeCacheType(
 
             const values = try allocator.alignedAlloc(
                 Value,
-                value_alignment,
+                std.mem.Alignment.fromByteUnits(value_alignment),
                 value_count_max,
             );
             errdefer allocator.free(values);

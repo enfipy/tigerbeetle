@@ -116,7 +116,7 @@ test "benchmark: segmented array" {
         const queries = try alloc_shuffled_index(allocator, options.value_count, &prng);
         defer allocator.free(queries);
 
-        var timer = try std.time.Timer.start();
+        const start = std.Io.Timestamp.now(std.Options.debug_io, .boot);
         const repetitions = @max(1, @divFloor(samples, queries.len));
         var j: usize = 0;
         while (j < repetitions) : (j += 1) {
@@ -124,7 +124,12 @@ test "benchmark: segmented array" {
                 std.mem.doNotOptimizeAway(array.absolute_index_for_cursor(array.search(query)));
             }
         }
-        const time = timer.read() / repetitions / queries.len;
+        const time: u64 = @intCast(
+            @divFloor(
+                start.durationTo(std.Io.Timestamp.now(std.Options.debug_io, .boot)).nanoseconds,
+                repetitions * queries.len,
+            ),
+        );
 
         log.info(
             "KeyType={} ValueCount={:_>7} ValueSize={:_>2}B NodeSize={:_>6}B LookupTime={:_>6}ns",

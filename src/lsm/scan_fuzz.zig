@@ -168,10 +168,8 @@ const QuerySpec = struct {
     /// E.g. "((a OR b) and c)".
     pub fn format(
         self: *const QuerySpec,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
         var stack: stdx.BoundedArrayType(QueryPart.Merge, query_scans_max - 1) = .{};
         var print_operator: bool = false;
         for (0..self.query.count()) |index| {

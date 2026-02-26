@@ -117,7 +117,7 @@ pub fn StorageType(comptime IO: type) type {
             const basename = std.fs.path.basename(options.path);
 
             const dir_fd = try IO.open_dir(dirname);
-            errdefer std.posix.close(dir_fd);
+            errdefer _ = std.c.close(dir_fd);
 
             const fd = try io.open_data_file(
                 dir_fd,
@@ -126,7 +126,7 @@ pub fn StorageType(comptime IO: type) type {
                 options.purpose,
                 options.direct_io,
             );
-            errdefer std.posix.close(fd);
+            errdefer _ = std.c.close(fd);
 
             return .{
                 .io = io,
@@ -141,10 +141,10 @@ pub fn StorageType(comptime IO: type) type {
             assert(storage.fd != IO.INVALID_FILE);
             assert(storage.dir_fd != IO.INVALID_FILE);
 
-            std.posix.close(storage.fd);
+            _ = std.c.close(storage.fd);
             storage.fd = IO.INVALID_FILE;
 
-            std.posix.close(storage.dir_fd);
+            _ = std.c.close(storage.dir_fd);
             storage.dir_fd = IO.INVALID_FILE;
         }
 

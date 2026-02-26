@@ -189,12 +189,8 @@ pub fn ReplicaType(
 
             pub fn format(
                 self: LogPrefix,
-                comptime fmt: []const u8,
-                options: std.fmt.FormatOptions,
-                writer: anytype,
-            ) !void {
-                _ = fmt;
-                _ = options;
+                writer: *std.Io.Writer,
+            ) std.Io.Writer.Error!void {
                 try writer.print("{}", .{self.replica});
 
                 var status_character: u8 = switch (self.status) {
@@ -3915,7 +3911,7 @@ pub fn ReplicaType(
             self.trace.gauge(
                 .replica_pipeline_queue_length,
                 switch (self.pipeline) {
-                    .cache => |_| 0,
+                    .cache => 0,
                     .queue => |*queue| queue.prepare_queue.count + queue.request_queue.count,
                 },
             );
