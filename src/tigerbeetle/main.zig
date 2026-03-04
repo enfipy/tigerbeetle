@@ -62,7 +62,7 @@ pub const std_options: std.Options = .{
 pub fn main(process: std.process.Init.Minimal) !void {
     if (builtin.os.tag == .windows) try vsr.multiversion.wait_for_parent_to_exit();
 
-    var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena_instance = std.heap.ArenaAllocator.init(stdx.huge_page_allocator);
     defer arena_instance.deinit();
 
     // Arena is an implementation detail, all memory must be freed.
@@ -405,17 +405,21 @@ fn command_start(
     };
 
     if (multiversion_os != null) {
-        if (args.development) {
+        if (builtin.target.os.tag != .linux) {
+            // Checking for new binaries on disk after the replica has been opened is only
+            // supported on Linux.
+            log.info("multiversioning: upgrade polling disabled; only available on Linux", .{});
+        } else if (args.development) {
             log.info("multiversioning: upgrade polling disabled due to --development.", .{});
         } else {
             multiversion_os.?.timeout_start(replica.replica);
-        }
 
-        if (args.experimental) {
-            log.warn("multiversioning: upgrade polling and --experimental enabled - " ++
-                "make sure to check CLI argument compatibility before upgrading.", .{});
-            log.warn("If the cluster upgrades automatically, and incompatible experimental " ++
-                "CLI arguments are set, it will crash.", .{});
+            if (args.experimental) {
+                log.warn("multiversioning: upgrade polling and --experimental enabled - " ++
+                    "make sure to check CLI argument compatibility before upgrading.", .{});
+                log.warn("If the cluster upgrades automatically, and incompatible experimental " ++
+                    "CLI arguments are set, it will crash.", .{});
+            }
         }
     }
 
@@ -625,6 +629,8 @@ fn command_amqp(gpa: mem.Allocator, time: Time, args: *const cli.Command.AMQP) !
             .event_count_max = args.event_count_max,
             .idle_interval_ms = args.idle_interval_ms,
             .requests_per_second_limit = args.requests_per_second_limit,
+            .amqp_timeout_seconds = args.amqp_timeout_seconds,
+            .tigerbeetle_timeout_seconds = args.tigerbeetle_timeout_seconds,
             .recovery_mode = if (args.timestamp_last) |timestamp_last|
                 .{ .override = timestamp_last }
             else

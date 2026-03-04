@@ -676,6 +676,8 @@ pub fn ManifestLogType(comptime Storage: type) type {
             assert(manifest_log.blocks.count ==
                 manifest_log.blocks_closed + @intFromBool(manifest_log.entry_count > 0));
             assert(manifest_log.compact_blocks == null);
+            assert(op >= constants.lsm_compaction_ops);
+            assert(!manifest_log.superblock.working.vsr_state.op_compacted(op));
 
             // TODO: Currently manifest compaction is hardcoded to run on the last beat of each
             // half-bar.
@@ -684,14 +686,6 @@ pub fn ManifestLogType(comptime Storage: type) type {
             assert((op + 1) % @divExact(constants.lsm_compaction_ops, 2) == 0);
 
             manifest_log.grid.trace.start(.compact_manifest);
-
-            if (op < constants.lsm_compaction_ops or
-                manifest_log.superblock.working.vsr_state.op_compacted(op))
-            {
-                manifest_log.read_callback = callback;
-                manifest_log.grid.on_next_tick(compact_tick_callback, &manifest_log.next_tick);
-                return;
-            }
 
             manifest_log.compact_blocks = @min(
                 manifest_log.pace.half_bar_compact_blocks(.{
@@ -710,22 +704,6 @@ pub fn ManifestLogType(comptime Storage: type) type {
 
             manifest_log.read_callback = callback;
             manifest_log.flush(compact_next_block);
-        }
-
-        fn compact_tick_callback(next_tick: *Grid.NextTick) void {
-            const manifest_log: *ManifestLog = @alignCast(@fieldParentPtr("next_tick", next_tick));
-            assert(manifest_log.write_callback == null);
-            assert(manifest_log.grid_reservation == null);
-            assert(manifest_log.blocks_closed == 0);
-            assert(manifest_log.blocks.count == 0);
-            assert(manifest_log.entry_count == 0);
-            assert(manifest_log.compact_blocks == null);
-
-            manifest_log.grid.trace.stop(.compact_manifest);
-
-            const callback = manifest_log.read_callback.?;
-            manifest_log.read_callback = null;
-            callback(manifest_log);
         }
 
         fn compact_next_block(manifest_log: *ManifestLog) void {
@@ -1185,43 +1163,57 @@ pub const Pace = struct {
         const log_blocks_full_max = stdx.div_ceil(options.tables_max, block_entries_max);
         assert(log_blocks_full_max > 0);
 
+        var pace: Pace = .{
+            .half_bar_append_blocks_max = half_bar_append_blocks_max,
+            .half_bar_compact_blocks_max = half_bar_compact_blocks_max,
+            .log_blocks_full_max = log_blocks_full_max,
+            .tables_max = options.tables_max,
+
+            .log_blocks_max = 0,
+            .log_blocks_cycle_max = 0,
+        };
+        defer {
+            assert(pace.log_blocks_max != 0);
+            assert(pace.log_blocks_cycle_max != 0);
+        }
+
         // "limit of MC(c) as c approaches ∞":
         // Working out this recurrence relation's limit with a closed-form solution is complicated.
         // Just compute the limit iteratively instead. (1024 is an arbitrary safety counter.)
-        var log_blocks_before: u32 = 0;
-        const log_blocks_cycle_max = for (0..1024) |_| {
+        pace.log_blocks_cycle_max = pace.log_blocks_cycle_max_fixed_point();
+
+        const log_blocks_burst_max = half_bar_append_blocks_max *
+            stdx.div_ceil(log_blocks_full_max + 1, half_bar_compact_blocks_max);
+
+        // "limit of MB(b) as b approaches ∞":
+        pace.log_blocks_max = pace.log_blocks_cycle_max + log_blocks_burst_max;
+
+        assert(pace.log_blocks_cycle_max > pace.log_blocks_full_max);
+        assert(pace.log_blocks_cycle_max < pace.log_blocks_max);
+
+        return pace;
+    }
+
+    fn log_blocks_cycle_max_fixed_point(pace: Pace) u64 {
+        assert(pace.log_blocks_cycle_max == 0);
+        assert(pace.log_blocks_max == 0);
+
+        var log_blocks_before: u64 = 0;
+        for (0..1024) |_| {
             const log_blocks_after =
-                log_blocks_full_max +
-                half_bar_append_blocks_max *
-                    stdx.div_ceil(log_blocks_before, half_bar_compact_blocks_max);
+                pace.log_blocks_full_max +
+                pace.half_bar_append_blocks_max *
+                    stdx.div_ceil(log_blocks_before, pace.half_bar_compact_blocks_max);
 
             if (log_blocks_before == log_blocks_after) {
-                break log_blocks_after;
+                return log_blocks_after;
             }
             log_blocks_before = log_blocks_after;
         } else {
             // If the value does not converge within the given number of steps,
             // constants.lsm_manifest_compact_blocks_extra should probably be raised.
             @panic("ManifestLog.Pace.log_blocks_cycle_max: no convergence");
-        };
-
-        const log_blocks_burst_max = half_bar_append_blocks_max *
-            stdx.div_ceil(log_blocks_full_max + 1, half_bar_compact_blocks_max);
-
-        // "limit of MB(b) as b approaches ∞":
-        const log_blocks_max = log_blocks_cycle_max + log_blocks_burst_max;
-
-        assert(log_blocks_cycle_max > log_blocks_full_max);
-        assert(log_blocks_cycle_max < log_blocks_max);
-
-        return .{
-            .half_bar_append_blocks_max = half_bar_append_blocks_max,
-            .half_bar_compact_blocks_max = half_bar_compact_blocks_max,
-            .log_blocks_full_max = log_blocks_full_max,
-            .log_blocks_max = log_blocks_max,
-            .log_blocks_cycle_max = log_blocks_cycle_max,
-            .tables_max = options.tables_max,
-        };
+        }
     }
 
     fn half_bar_compact_blocks(pace: Pace, options: struct {

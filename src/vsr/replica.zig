@@ -1019,7 +1019,7 @@ pub fn ReplicaType(
             assert(!self.grid.blocks_missing.repairing_tables());
             self.assert_free_set_consistent();
 
-            log.debug("{}: state_machine_open_callback: sync_ops={}..{}", .{
+            log.info("{}: state_machine_open_callback: sync_ops={}..{}", .{
                 self.log_prefix(),
                 self.superblock.working.vsr_state.sync_op_min,
                 self.superblock.working.vsr_state.sync_op_max,
@@ -1452,7 +1452,7 @@ pub fn ReplicaType(
             };
             self.routing.view_change(self.view);
 
-            log.debug("{}: init: replica_count={} quorum_view_change={} quorum_replication={} " ++
+            log.info("{}: init: replica_count={} quorum_view_change={} quorum_replication={} " ++
                 "release={}", .{
                 self.log_prefix(),
                 self.replica_count,
@@ -1514,6 +1514,7 @@ pub fn ReplicaType(
             assert(self.journal.header_with_op(self.op) != null);
             assert(self.view == self.routing.view);
             assert((self.sync_tables == null) == (self.sync_tables_op_range == null));
+            assert(self.commit_min <= self.op);
         }
 
         /// Time is measured in logical ticks that are incremented on every call to tick().
@@ -2559,7 +2560,7 @@ pub fn ReplicaType(
                 });
                 return;
             }
-            log.debug("{}: on_start_view_change: view={} quorum received (replicas={b:0>6})", .{
+            log.info("{}: on_start_view_change: view={} quorum received (replicas={b:0>6})", .{
                 self.log_prefix(),
                 self.view,
                 self.start_view_change_from_all_replicas.bits,
@@ -2639,7 +2640,7 @@ pub fn ReplicaType(
                 .complete_valid => |*quorum_headers| quorum_headers.next().?.op,
             };
 
-            log.debug("{}: on_do_view_change: view={} quorum received", .{
+            log.info("{}: on_do_view_change: view={} quorum received", .{
                 self.log_prefix(),
                 self.view,
             });
@@ -2692,7 +2693,7 @@ pub fn ReplicaType(
                     }
                 } else unreachable;
 
-                log.mark.debug("{}: on_do_view_change: lagging primary; forfeiting " ++
+                log.mark.warn("{}: on_do_view_change: lagging primary; forfeiting " ++
                     "(view={}..{} checkpoint={}..{})", .{
                     self.log_prefix(),
                     self.view,
@@ -3671,7 +3672,7 @@ pub fn ReplicaType(
             self.primary_abdicate_timeout.reset();
             if (self.solo()) return;
 
-            log.debug("{}: on_primary_abdicate_timeout: abdicating (view={})", .{
+            log.warn("{}: on_primary_abdicate_timeout: abdicating (view={})", .{
                 self.log_prefix(),
                 self.view,
             });
@@ -3857,7 +3858,7 @@ pub fn ReplicaType(
                 };
                 assert(!self.grid.free_set.is_free(fault.block_address));
 
-                log.debug("{}: on_grid_scrub_timeout: fault found: " ++
+                log.warn("{}: on_grid_scrub_timeout: fault found: " ++
                     "block_address={} block_checksum={x:0>32} block_type={s}", .{
                     self.log_prefix(),
                     fault.block_address,
@@ -5835,23 +5836,16 @@ pub fn ReplicaType(
             assert(self.view == self.log_view);
             assert(self.view_headers.command == .start_view);
 
+            const op_range = self.update_start_view_headers_op_range();
+            if (self.primary_index(self.view) == self.replica) {
+                assert(op_range.op_max == self.op);
+            } else {
+                assert(op_range.op_max == self.op_checkpoint_next_trigger());
+            }
+
             self.view_headers.array.clear();
 
-            // All replicas are guaranteed to have no gaps in their headers between op_checkpoint
-            // and commit_min. Between commit_min and self.op:
-            // * The primary is guaranteed to have no gaps.
-            // * Backups are not guaranteed to have no gaps, they may have not received some
-            //   prepares yet.
-            const op_head_no_gaps = blk: {
-                if (self.primary_index(self.view) == self.replica) {
-                    break :blk self.op;
-                } else {
-                    assert(self.commit_min == self.op_checkpoint_next_trigger());
-                    break :blk self.op_checkpoint_next_trigger();
-                }
-            };
-
-            var op = op_head_no_gaps + 1;
+            var op = op_range.op_max + 1;
             while (op > 0 and
                 self.view_headers.array.count() < constants.view_change_headers_suffix_max)
             {
@@ -5860,38 +5854,13 @@ pub fn ReplicaType(
             }
             assert(self.view_headers.array.count() + 2 <= constants.view_headers_max);
 
-            // Determine the consecutive extent of the log that we can help recover.
-            // This may precede op_repair_min if we haven't had a view-change recently.
-            const range_min = (@max(op_head_no_gaps, self.op) + 1) -| constants.journal_slot_count;
-
-            const range = self.journal.find_latest_headers_break_between(
-                range_min,
-                op_head_no_gaps,
-            );
-            const op_min = if (range) |r| r.op_max + 1 else range_min;
-            assert(op_min <= op);
-
-            if (self.op_checkpoint() == 0 and range != null) {
-                // We get here only if we are a backup with a missing root op, advancing our
-                // checkpoint mid-repair. Primaries can never have a missing root op as repair
-                // ensures a primary's journal is clean before it transitions to .normal status.
-                assert(self.status == .normal);
-                assert(self.backup());
-                assert(self.commit_min == self.op_checkpoint_next_trigger());
-                assert(op_min == 1);
-                assert(range.?.op_max == 0);
-                assert(range.?.op_min == 0);
-            } else {
-                assert(op_min <= self.op_repair_min());
-            }
-
             // The SV includes headers corresponding to the op_prepare_max for preceding
             // checkpoints (as many as we have and can help repair, which is at most 2).
             for ([_]u64{
                 self.op_prepare_max() -| constants.vsr_checkpoint_ops,
                 self.op_prepare_max() -| constants.vsr_checkpoint_ops * 2,
             }) |op_hook| {
-                if (op > op_hook and op_hook >= op_min) {
+                if (op > op_hook and op_hook >= op_range.op_min) {
                     op = op_hook;
                     self.view_headers.append(self.journal.header_with_op(op).?);
                 }
@@ -5901,6 +5870,51 @@ pub fn ReplicaType(
                 self.view_headers.array.get(0).op + 1, // +1 to include the head itself.
             ));
             self.view_headers.verify();
+        }
+
+        // The range of ops that we can include in view_headers, capacity permitting.
+        // The longest unbroken chain of prepares up to the head (for the primary),
+        // or commit_min (for backups).
+        fn update_start_view_headers_op_range(self: *const Replica) struct {
+            op_min: u64,
+            op_max: u64,
+        } {
+            assert(self.status != .recovering_head);
+            assert(self.view == self.log_view);
+            assert(self.view_headers.command == .start_view);
+
+            if (self.primary_index(self.view) != self.replica) {
+                assert(self.status == .normal);
+                assert(self.backup());
+                assert(self.commit_min == self.op_checkpoint_next_trigger());
+            }
+
+            const op_max = if (self.primary_index(self.view) == self.replica)
+                self.op
+            else
+                self.commit_min;
+
+            const journal_start = self.op + 1 -| constants.journal_slot_count;
+            const header_break = self.journal.find_latest_headers_break_between(
+                journal_start,
+                op_max,
+            );
+            const op_min = if (header_break) |b| b.op_max + 1 else journal_start;
+
+            if (self.op_checkpoint() == 0 and header_break != null) {
+                // We get here only if we are a backup with a missing root op, advancing our
+                // checkpoint mid-repair. Primaries can never have a missing root op as repair
+                // ensures a primary's journal is clean before it transitions to .normal status.
+                assert(self.backup());
+                assert(header_break.?.op_min == 0);
+                assert(header_break.?.op_max == 0);
+
+                assert(op_min == 1);
+            } else {
+                assert(op_min <= self.op_repair_min());
+            }
+
+            return .{ .op_min = op_min, .op_max = op_max };
         }
 
         fn primary_update_view_headers(self: *Replica) void {
@@ -9977,7 +9991,7 @@ pub fn ReplicaType(
             assert(self.view_headers.command == .start_view);
             defer assert(self.log_view >= self.superblock.working.vsr_state.checkpoint.header.view);
 
-            log.debug(
+            log.info(
                 "{}: transition_to_normal_from_recovering_head_status: view={}..{} backup",
                 .{
                     self.log_prefix(),

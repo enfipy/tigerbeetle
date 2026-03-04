@@ -57,6 +57,16 @@ Here what the arguments mean:
   Must be greater than zero.<br>
   Optional. No limit if omitted.
 
+* `--amqp-timeout-seconds` the maximum time, in seconds, to wait for a reply from
+  the AMQP server. If exceeded, the process exits with a non-zero code.<br>
+  Must be greater than 0.<br>
+  Optional. Defaults to `30` seconds if omitted.
+
+* `--tigerbeetle-timeout-seconds` the maximum time, in seconds, to wait for a reply from
+  the TigerBeetle cluster. If exceeded, the process exits with a non-zero code.<br>
+  Must be greater than 0.<br>
+  Optional. Defaults to `30` seconds if omitted.
+
 * `--timestamp-last` overrides the last published timestamp, resuming from this point.<br>
   This is a TigerBeetle timestamp with nanosecond precision.<br>
   Optional. If omitted, the last acknowledged timestamp is used.
@@ -173,8 +183,8 @@ It is the consumer's responsibility to perform **idempotency checks** when proce
 The CDC job requires TigerBeetle cluster version `0.16.43` or greater.
 
 The same [upgrade planning](./upgrading.md#planning-for-upgrades) recommended for clients applies
-to the CDC job. The CDC job version must not be newer than the cluster version, as it will fail
-with an error message if so.
+to the CDC job. The CDC job version must not be newer than the cluster version, and if so will fail
+with an error message.
 
 Any transactions _originally_ created by TigerBeetle versions before `0.16.29` have the following
 limitations for CDC processing:

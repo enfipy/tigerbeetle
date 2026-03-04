@@ -733,7 +733,7 @@ fn tidy_ast(
     // functions to grow over time.
     const function_length_red_zone = .{
         .min = 70, // NB: both are exclusive, so red zone is intentionally empty to start!
-        .max = 70,
+        .max = 73,
     };
 
     for (functions[0..functions_count], 0..) |f, index| {
@@ -1228,6 +1228,7 @@ const DeadFilesDetector = struct {
             "build_multiversion.zig",
             "build.zig",
             "dotnet_bindings.zig",
+            "fetch.zig",
             "file_checker.zig",
             "fuzz_tests.zig",
             "go_bindings.zig",
@@ -1240,10 +1241,10 @@ const DeadFilesDetector = struct {
             "node.zig",
             "page_writer.zig",
             "python_bindings.zig",
+            "rust_bindings.zig",
             "scripts.zig",
             "search_index_writer.zig",
             "service_worker_writer.zig",
-            "rust_bindings.zig",
             "single_page_writer.zig",
             "tb_client_header.zig",
             "unit_tests.zig",

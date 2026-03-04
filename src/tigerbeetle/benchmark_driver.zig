@@ -238,16 +238,19 @@ fn start(allocator: std.mem.Allocator, process_io: std.Io, options: struct {
         child.kill(process_io);
     }
 
-    const port = port: {
-        errdefer log.err("failed to read port number from tigerbeetle process", .{});
-        var port_buf: [std.fmt.count("{}\n", .{std.math.maxInt(u16)})]u8 = undefined;
-        var stdout_reader = child.stdout.?.reader(std.Options.debug_io, &port_buf);
-        const port_buf_slice = (try stdout_reader.interface.takeDelimiter('\n')) orelse
-            return error.InvalidPort;
-        break :port try std.fmt.parseInt(u16, port_buf_slice, 10);
-    };
+    const port = try read_started_port(&child);
 
     const address: std.Io.net.IpAddress = .{ .ip4 = .loopback(port) };
 
     return .{ .child = child, .address = address };
+}
+
+fn read_started_port(child: *std.process.Child) !u16 {
+    errdefer log.err("failed to read port number from tigerbeetle process", .{});
+
+    var port_buf: [std.fmt.count("{}\n", .{std.math.maxInt(u16)})]u8 = undefined;
+    var stdout_reader = child.stdout.?.reader(std.Options.debug_io, &port_buf);
+    const port_buf_slice = (try stdout_reader.interface.takeDelimiter('\n')) orelse
+        return error.InvalidPort;
+    return try std.fmt.parseInt(u16, port_buf_slice, 10);
 }
