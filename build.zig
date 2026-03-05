@@ -960,10 +960,8 @@ fn build_test_integration(
     integration_tests.root_module.addIncludePath(options.tb_client_header.dirname());
     steps.test_integration_build.dependOn(&b.addInstallArtifact(integration_tests, .{}).step);
 
-    const run_integration_tests = b.addRunArtifact(integration_tests);
-    if (b.args != null) { // Don't cache test results if running a specific test.
-        run_integration_tests.has_side_effects = true;
-    }
+    const run_integration_tests = b.addSystemCommand(&.{ "sh", "-c", "exec \"$1\"", "--" });
+    run_integration_tests.addFileArg(integration_tests.getEmittedBin());
     run_integration_tests.has_side_effects = true;
     steps.test_integration.dependOn(&run_integration_tests.step);
 }
