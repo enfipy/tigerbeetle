@@ -353,7 +353,7 @@ test "help/version smoke" {
         .{ .command = "{tigerbeetle} --help", .substring = "tigerbeetle repl" },
         .{ .command = "{tigerbeetle} inspect --help", .substring = "tables --tree" },
         .{ .command = "{tigerbeetle} version", .substring = "TigerBeetle version" },
-        .{ .command = "{tigerbeetle} version --verbose", .substring = "process.backoff_max_ms=" },
+        .{ .command = "{tigerbeetle} version --verbose", .substring = "process.backoff_max=" },
     }) |check| {
         const result = try shell.exec_raw(check.command, .{ .tigerbeetle = tigerbeetle });
         switch (result.term) {

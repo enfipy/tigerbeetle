@@ -235,8 +235,8 @@ pub fn build(b: *std.Build) !void {
     }, .{
         .stdx_module = stdx_module,
         .tb_client_header = tb_client.header,
-        .vsr_module_test = vsr_module_test,
-        .vsr_options_test = vsr_options_test,
+        .vsr_module = vsr_module,
+        .vsr_options = vsr_options,
         .target = target,
         .mode = mode,
         .print_exe = build_options.print_exe,
@@ -1226,8 +1226,8 @@ fn build_vortex_driver_zig(
     options: struct {
         tb_client_header: std.Build.LazyPath,
         stdx_module: *std.Build.Module,
-        vsr_module_test: *std.Build.Module,
-        vsr_options_test: *std.Build.Step.Options,
+        vsr_module: *std.Build.Module,
+        vsr_options: *std.Build.Step.Options,
         target: std.Build.ResolvedTarget,
         mode: std.builtin.OptimizeMode,
         print_exe: bool,
@@ -1245,8 +1245,8 @@ fn build_vortex_driver_zig(
     tb_client.root_module.link_libc = true;
     tb_client.pie = true;
     tb_client.bundle_compiler_rt = true;
-    tb_client.root_module.addImport("vsr", options.vsr_module_test);
-    tb_client.root_module.addOptions("vsr_options", options.vsr_options_test);
+    tb_client.root_module.addImport("vsr", options.vsr_module);
+    tb_client.root_module.addOptions("vsr_options", options.vsr_options);
     if (options.target.result.os.tag == .windows) {
         tb_client.root_module.linkSystemLibrary("ws2_32", .{});
         tb_client.root_module.linkSystemLibrary("advapi32", .{});
@@ -1265,7 +1265,7 @@ fn build_vortex_driver_zig(
     vortex_driver.root_module.linkLibrary(tb_client);
     vortex_driver.root_module.addIncludePath(options.tb_client_header.dirname());
     vortex_driver.root_module.addImport("stdx", options.stdx_module);
-    vortex_driver.root_module.addImport("vsr", options.vsr_module_test);
+    vortex_driver.root_module.addImport("vsr", options.vsr_module);
 
     const install_step = print_or_install(b, vortex_driver, options.print_exe);
     steps.vortex_driver_zig_build.dependOn(install_step);
