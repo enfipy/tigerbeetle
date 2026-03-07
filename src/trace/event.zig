@@ -28,12 +28,7 @@ const Operation = operation_enum: {
         }
     }
 
-    break :operation_enum @Type(.{ .@"enum" = .{
-        .tag_type = u8,
-        .fields = operation_fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    break :operation_enum stdx.EnumFromFieldsType(u8, operation_fields, true);
 };
 
 const TreeEnum = tree_enum: {
