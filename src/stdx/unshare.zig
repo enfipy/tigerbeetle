@@ -114,7 +114,7 @@ pub fn linux_unshare(options: struct {
 
     // Create user namespace first.
     const unshare_user_result = std.os.linux.unshare(linux.CLONE.NEWUSER);
-    const unshare_user_errno = std.os.linux.E.init(unshare_user_result);
+    const unshare_user_errno = std.posix.errno(unshare_user_result);
     if (unshare_user_errno != .SUCCESS) {
         log.err("Failed to create user namespace: {}", .{unshare_user_errno});
         return error.UnshareFailure;
@@ -123,7 +123,7 @@ pub fn linux_unshare(options: struct {
     // Create PID namespace.
     if (options.pid) {
         const unshare_pid_result = std.os.linux.unshare(linux.CLONE.NEWPID);
-        const unshare_pid_errno = std.os.linux.E.init(unshare_pid_result);
+        const unshare_pid_errno = std.posix.errno(unshare_pid_result);
         if (unshare_pid_errno != .SUCCESS) {
             log.err("Failed to create pid namespace: {}", .{unshare_pid_errno});
             return error.UnshareFailure;
@@ -133,7 +133,7 @@ pub fn linux_unshare(options: struct {
     // Create network namespace.
     if (options.network) {
         const unshare_net_result = std.os.linux.unshare(linux.CLONE.NEWNET);
-        const unshare_net_errno = std.os.linux.E.init(unshare_net_result);
+        const unshare_net_errno = std.posix.errno(unshare_net_result);
         if (unshare_net_errno != .SUCCESS) {
             log.err("Failed to create net namespace: {}", .{unshare_net_errno});
             return error.UnshareFailure;

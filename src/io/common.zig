@@ -202,12 +202,20 @@ pub fn aof_blocking_pread_all(
 ) AOFBlockingPReadError!usize {
     var read_total: usize = 0;
     while (read_total < buffer.len) {
-        const n = std.c.pread(
-            fd,
-            buffer[read_total..].ptr,
-            buffer.len - read_total,
-            @intCast(offset + read_total),
-        );
+        const n = if (builtin.os.tag == .linux)
+            std.os.linux.pread(
+                fd,
+                buffer[read_total..].ptr,
+                buffer.len - read_total,
+                @intCast(offset + read_total),
+            )
+        else
+            std.c.pread(
+                fd,
+                buffer[read_total..].ptr,
+                buffer.len - read_total,
+                @intCast(offset + read_total),
+            );
         switch (posix.errno(n)) {
             .SUCCESS => {
                 if (n == 0) break;
