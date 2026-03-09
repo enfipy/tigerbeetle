@@ -422,10 +422,15 @@ pub const IO = struct {
                     sqe.prep_close(op.fd);
                 },
                 .connect => |*op| {
+                    var posix_address: std.Io.Threaded.PosixAddress = undefined;
+                    const posix_address_len = std.Io.Threaded.addressToPosix(
+                        &op.address,
+                        &posix_address,
+                    );
                     sqe.prep_connect(
                         op.socket,
-                        &op.address.any,
-                        op.address.getOsSockLen(),
+                        &posix_address.any,
+                        posix_address_len,
                     );
                 },
                 .fsync => |op| {
@@ -627,7 +632,7 @@ pub const IO = struct {
                                 .PERM => error.AccessDenied,
                                 .EXIST => error.PathAlreadyExists,
                                 .BUSY => error.DeviceBusy,
-                                .OPNOTSUPP => error.FileLocksNotSupported,
+                                .OPNOTSUPP => error.FileLocksUnsupported,
                                 .AGAIN => error.WouldBlock,
                                 .TXTBSY => error.FileBusy,
                                 else => |errno| stdx.unexpected_errno("openat", errno),
@@ -856,7 +861,7 @@ pub const IO = struct {
             dir_fd: fd_t,
             file_path: [*:0]const u8,
             flags: u32,
-            mask: u32,
+            mask: std.os.linux.STATX,
             statxbuf: *std.os.linux.Statx,
         },
         timeout: struct {
@@ -1207,7 +1212,7 @@ pub const IO = struct {
         FileNotFound,
         NameTooLong,
         NotDir,
-    } || std.fs.File.StatError || posix.UnexpectedError;
+    } || std.Io.File.StatError || posix.UnexpectedError;
 
     pub fn statx(
         self: *IO,
@@ -1222,7 +1227,7 @@ pub const IO = struct {
         dir_fd: fd_t,
         file_path: [*:0]const u8,
         flags: u32,
-        mask: u32,
+        mask: std.os.linux.STATX,
         statxbuf: *std.os.linux.Statx,
     ) void {
         completion.* = .{
@@ -1394,11 +1399,24 @@ pub const IO = struct {
 
     /// Creates a TCP socket that can be used for async operations with the IO instance.
     pub fn open_socket_tcp(self: *IO, family: u32, options: TCPOptions) !socket_t {
-        const fd = try posix.socket(
-            family,
-            posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
-            posix.IPPROTO.TCP,
-        );
+        const socket_flags: u32 = linux.SOCK.STREAM | linux.SOCK.CLOEXEC;
+        const fd: socket_t = blk: {
+            const result = linux.socket(
+                family,
+                socket_flags,
+                posix.IPPROTO.TCP,
+            );
+            switch (posix.errno(result)) {
+                .SUCCESS => break :blk @intCast(result),
+                .AFNOSUPPORT => return error.AddressFamilyNotSupported,
+                .PROTONOSUPPORT => return error.ProtocolNotSupported,
+                .NFILE => return error.SystemFdQuotaExceeded,
+                .MFILE => return error.ProcessFdQuotaExceeded,
+                .NOBUFS, .NOMEM => return error.SystemResources,
+                .INVAL => unreachable,
+                else => |err| return stdx.unexpected_errno("socket", err),
+            }
+        };
         errdefer self.close_socket(fd);
 
         try common.tcp_options(fd, options);
@@ -1408,17 +1426,28 @@ pub const IO = struct {
     /// Creates a UDP socket that can be used for async operations with the IO instance.
     pub fn open_socket_udp(self: *IO, family: u32) !socket_t {
         _ = self;
-        return try posix.socket(
+        const socket_flags: u32 = linux.SOCK.DGRAM | linux.SOCK.CLOEXEC;
+        const result = linux.socket(
             family,
-            std.posix.SOCK.DGRAM | posix.SOCK.CLOEXEC,
+            socket_flags,
             posix.IPPROTO.UDP,
         );
+        return switch (posix.errno(result)) {
+            .SUCCESS => @intCast(result),
+            .AFNOSUPPORT => error.AddressFamilyNotSupported,
+            .PROTONOSUPPORT => error.ProtocolNotSupported,
+            .NFILE => error.SystemFdQuotaExceeded,
+            .MFILE => error.ProcessFdQuotaExceeded,
+            .NOBUFS, .NOMEM => error.SystemResources,
+            .INVAL => unreachable,
+            else => |err| stdx.unexpected_errno("socket", err),
+        };
     }
 
     /// Closes a socket opened by the IO instance.
     pub fn close_socket(self: *IO, socket: socket_t) void {
         _ = self;
-        posix.close(socket);
+        _ = linux.close(socket);
     }
 
     /// Listen on the given TCP socket.

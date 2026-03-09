@@ -144,7 +144,7 @@ pub const StatsD = struct {
         // 'Connect' the UDP socket, so we can just send() to it normally.
         var posix_address: std.Io.Threaded.PosixAddress = undefined;
         const posix_address_len = std.Io.Threaded.addressToPosix(&address, &posix_address);
-        switch (std.posix.errno(std.c.connect(socket, &posix_address.any, posix_address_len))) {
+        switch (std.posix.errno(std.os.linux.connect(socket, &posix_address.any, posix_address_len))) {
             .SUCCESS => {},
             else => |err| return stdx.unexpected_errno("connect", err),
         }

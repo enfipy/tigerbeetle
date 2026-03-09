@@ -102,12 +102,11 @@ fn fd_pwrite_all(fd: posix.fd_t, buffer: []const u8, offset: u64) !void {
     var bytes_written: usize = 0;
     while (bytes_written < buffer.len) {
         const offset_n: posix.off_t = @intCast(offset + bytes_written);
-        const rc = std.c.pwrite(
-            fd,
-            buffer[bytes_written..].ptr,
-            buffer.len - bytes_written,
-            offset_n,
-        );
+        const iovec = [1]std.posix.iovec_const{.{
+            .base = buffer[bytes_written..].ptr,
+            .len = buffer.len - bytes_written,
+        }};
+        const rc = os.linux.pwritev(fd, &iovec, iovec.len, offset_n);
         const n = switch (posix.errno(rc)) {
             .SUCCESS => @as(usize, @intCast(rc)),
             .INTR => continue,
@@ -790,9 +789,15 @@ pub const MultiversionOS = struct {
         const target_fd: posix.fd_t = switch (builtin.target.os.tag) {
             .linux => blk: {
                 const fd = open_memory_file(target_path);
-                errdefer _ = std.c.close(fd);
+                errdefer (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).close(std.Options.debug_io);
 
-                try posix.ftruncate(fd, multiversion_binary_size_max_by_format);
+                switch (posix.errno(std.os.linux.ftruncate(
+                    fd,
+                    @intCast(multiversion_binary_size_max_by_format),
+                ))) {
+                    .SUCCESS => {},
+                    else => |err| return stdx.unexpected_errno("ftruncate", err),
+                }
 
                 break :blk fd;
             },
@@ -820,7 +825,7 @@ pub const MultiversionOS = struct {
 
             else => @panic("unsupported platform"),
         };
-        errdefer _ = std.c.close(target_fd);
+        errdefer (std.Io.File{ .handle = target_fd, .flags = .{ .nonblocking = false } }).close(std.Options.debug_io);
 
         const args_envp: ArgsEnvp = switch (builtin.target.os.tag) {
             .linux, .macos => blk: {
@@ -889,7 +894,7 @@ pub const MultiversionOS = struct {
     }
 
     pub fn deinit(self: *MultiversionOS, allocator: std.mem.Allocator) void {
-        _ = std.c.close(self.target_fd);
+        (std.Io.File{ .handle = self.target_fd, .flags = .{ .nonblocking = false } }).close(std.Options.debug_io);
         self.target_fd = IO.INVALID_FILE;
         allocator.free(self.target_path);
 
@@ -1013,7 +1018,19 @@ pub const MultiversionOS = struct {
             posix.AT.FDCWD,
             self.exe_path,
             0,
-            os.linux.STATX_BASIC_STATS,
+            .{
+                .TYPE = true,
+                .MODE = true,
+                .NLINK = true,
+                .UID = true,
+                .GID = true,
+                .ATIME = true,
+                .MTIME = true,
+                .CTIME = true,
+                .INO = true,
+                .SIZE = true,
+                .BLOCKS = true,
+            },
             &self.timeout_statx,
         );
     }
@@ -1136,7 +1153,7 @@ pub const MultiversionOS = struct {
                 assert(self.source_fd != null);
                 assert(self.source_offset != null);
 
-                _ = std.c.close(self.source_fd.?);
+                (std.Io.File{ .handle = self.source_fd.?, .flags = .{ .nonblocking = false } }).close(std.Options.debug_io);
                 self.source_offset = null;
                 self.source_fd = null;
             }
@@ -1486,7 +1503,7 @@ pub const MultiversionOS = struct {
                 var lp_process_information: std.os.windows.PROCESS_INFORMATION = undefined;
 
                 // Close the handle before trying to execute.
-                _ = std.c.close(self.target_fd);
+                (std.Io.File{ .handle = self.target_fd, .flags = .{ .nonblocking = false } }).close(std.Options.debug_io);
 
                 const pipe_name: [*:0]const u16 =
                     std.unicode.utf8ToUtf16LeStringLiteral("\\\\.\\pipe\\") ++ random_wstr();

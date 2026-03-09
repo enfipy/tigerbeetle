@@ -143,7 +143,19 @@ test "open/write/read/close/statx" {
                     posix.AT.FDCWD,
                     self.path,
                     0,
-                    os.linux.STATX_BASIC_STATS,
+                    .{
+                        .TYPE = true,
+                        .MODE = true,
+                        .NLINK = true,
+                        .UID = true,
+                        .GID = true,
+                        .ATIME = true,
+                        .MTIME = true,
+                        .CTIME = true,
+                        .INO = true,
+                        .SIZE = true,
+                        .BLOCKS = true,
+                    },
                     &self.statx,
                 );
             } else {
