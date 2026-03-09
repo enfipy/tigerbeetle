@@ -69,8 +69,8 @@ fn devhub_coverage(shell: *Shell) !void {
     try shell.exec_zig("build fuzz:build", .{});
 
     // Put results into src/devhub, as that folder is deployed as GitHub pages.
-    try shell.project_root.deleteTree("./src/devhub/coverage");
-    try shell.project_root.makePath("./src/devhub/coverage");
+    try shell.project_root.deleteTree(std.Options.debug_io, "./src/devhub/coverage");
+    try std.Io.Dir.createDirPath(shell.project_root, std.Options.debug_io, "./src/devhub/coverage");
 
     const kcov: []const []const u8 = &.{ "kcov", "--include-path=./src", "./src/devhub/coverage" };
     inline for (.{
@@ -82,14 +82,14 @@ fn devhub_coverage(shell: *Shell) !void {
         try shell.exec(command, .{ .kcov = kcov });
     }
 
-    var coverage_dir = try shell.cwd.openDir("./src/devhub/coverage", .{ .iterate = true });
-    defer coverage_dir.close();
+    var coverage_dir = try shell.cwd.openDir(std.Options.debug_io, "./src/devhub/coverage", .{ .iterate = true });
+    defer coverage_dir.close(std.Options.debug_io);
 
     // kcov adds some symlinks to the output, which prevents upload to GitHub actions from working.
     var it = coverage_dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(std.Options.debug_io)) |entry| {
         if (entry.kind == .sym_link) {
-            try coverage_dir.deleteFile(entry.name);
+            try coverage_dir.deleteFile(std.Options.debug_io, entry.name);
         }
     }
 }
@@ -98,31 +98,50 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
     var section = try shell.open_section("metrics");
     defer section.close();
 
+    const Timer = struct {
+        start: std.Io.Timestamp,
+
+        fn init() @This() {
+            return .{ .start = std.Io.Timestamp.now(std.Options.debug_io, .boot) };
+        }
+
+        fn reset(self: *@This()) void {
+            self.start = std.Io.Timestamp.now(std.Options.debug_io, .boot);
+        }
+
+        fn read_ms(self: *const @This()) u64 {
+            return @intCast(@divFloor(
+                self.start.durationTo(std.Io.Timestamp.now(std.Options.debug_io, .boot)).nanoseconds,
+                std.time.ns_per_ms,
+            ));
+        }
+    };
+
     const commit_timestamp_str =
         try shell.exec_stdout("git show -s --format=%ct {sha}", .{ .sha = cli_args.sha });
     const commit_timestamp = try std.fmt.parseInt(u64, commit_timestamp_str, 10);
 
     // Only build the TigerBeetle binary to test build speed and build size. Throw it away once
     // done, and use a release build from `zig-out/dist/` to run the benchmark.
-    var timer = try std.time.Timer.start();
+    var timer: Timer = .init();
 
     const build_time_debug_ms = blk: {
         timer.reset();
         try shell.exec_zig("build install", .{});
-        defer shell.project_root.deleteFile("tigerbeetle") catch unreachable;
+        defer shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle") catch unreachable;
 
-        break :blk timer.read() / std.time.ns_per_ms;
+        break :blk timer.read_ms();
     };
 
     const build_time_ms, const executable_size_bytes = blk: {
         timer.reset();
-        try shell.project_root.deleteTree(".zig-cache/tmp/devhub_cache");
+        try shell.project_root.deleteTree(std.Options.debug_io, ".zig-cache/tmp/devhub_cache");
         try shell.exec_zig("build -Drelease install", .{});
-        defer shell.project_root.deleteFile("tigerbeetle") catch unreachable;
+        defer shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle") catch unreachable;
 
         break :blk .{
-            timer.lap() / std.time.ns_per_ms,
-            (try shell.cwd.statFile("tigerbeetle")).size,
+            timer.read_ms(),
+            (try shell.cwd.statFile(std.Options.debug_io, "tigerbeetle", .{})).size,
         };
     };
 
@@ -131,18 +150,19 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
     // the release code to try and look for a version which doesn't yet exist!
     const no_changelog_flag = blk: {
         const changelog_text = try shell.project_root.readFileAlloc(
-            shell.arena.allocator(),
+            std.Options.debug_io,
             "CHANGELOG.md",
-            1 * MiB,
+            shell.arena.allocator(),
+            .limited(1 * MiB),
         );
         var changelog_iteratator = changelog.ChangelogIterator.init(changelog_text);
 
         const last_release_changelog = changelog_iteratator.next_changelog().?.release orelse
             break :blk true;
-        const last_release_published = try Release.parse(try shell.exec_stdout(
+        const last_release_published = Release.parse(try shell.exec_stdout(
             "gh release list --json tagName --jq {query} --limit 1",
             .{ .query = ".[].tagName" },
-        ));
+        )) catch break :blk true;
 
         if (Release.less_than({}, last_release_published, last_release_changelog)) {
             break :blk false;
@@ -162,7 +182,7 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
             \\    --language=zig --devhub
         , .{ .sha = cli_args.sha });
     }
-    try shell.project_root.deleteFile("tigerbeetle");
+    try shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle");
 
     try shell.unzip_executable(
         "zig-out/dist/tigerbeetle/tigerbeetle-x86_64-linux.zip",
@@ -185,10 +205,10 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
             .{},
         );
 
-        break :blk timer.read() / std.time.ns_per_ms;
+        break :blk timer.read_ms();
     };
 
-    shell.cwd.deleteFile("datafile-devhub") catch unreachable;
+    shell.cwd.deleteFile(std.Options.debug_io, "datafile-devhub") catch unreachable;
 
     const replica_log_lines = std.mem.count(u8, benchmark_stderr, "\n");
     const tps = try get_measurement(benchmark_result, "load accepted", "tx/s");
@@ -210,9 +230,9 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
             .{},
         );
 
-        break :blk timer.read() / std.time.ns_per_ms;
+        break :blk timer.read_ms();
     };
-    defer shell.cwd.deleteFile("datafile-devhub") catch unreachable;
+    defer shell.cwd.deleteFile(std.Options.debug_io, "datafile-devhub") catch unreachable;
 
     const stats_count = blk: {
         const stats_inspect_result = try shell.exec_stdout("./tigerbeetle inspect metrics", .{});
@@ -238,61 +258,26 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
 
         var process = try shell.spawn(
             .{
-                .stdin_behavior = .Pipe,
-                .stdout_behavior = .Pipe,
-                .stderr_behavior = .Ignore,
+                .stdin_behavior = .pipe,
+                .stdout_behavior = .pipe,
+                .stderr_behavior = .ignore,
             },
             "./tigerbeetle start --addresses=0 --cache-grid=8GiB datafile-devhub",
             .{},
         );
 
         defer {
-            process.stdin.?.close();
+            process.stdin.?.close(std.Options.debug_io);
             process.stdin = null;
-            _ = process.wait() catch {};
+            _ = process.wait(std.Options.debug_io) catch {};
         }
 
         var port_buffer: [std.fmt.count("{}\n", .{std.math.maxInt(u16)})]u8 = undefined;
-        const port_buffer_len = try process.stdout.?.readAll(&port_buffer);
-        const port = try std.fmt.parseInt(u16, port_buffer[0 .. port_buffer_len - 1], 10);
+        var stdout_reader = process.stdout.?.reader(std.Options.debug_io, &port_buffer);
+        const port_buffer_slice = try stdout_reader.interface.takeDelimiterExclusive('\n');
+        const port = try std.fmt.parseInt(u16, port_buffer_slice, 10);
 
-        // TODO: This sends a ping manually; once register connection speed has been fixed, this can
-        // use the benchmark or repl via CLI.
-        //
-        // Use Header directly with a blocking TCP connection here, to avoid pulling in half of TB.
-        const Header = @import("../vsr/message_header.zig").Header;
-
-        var ping = Header.PingClient{
-            .command = .ping_client,
-            .cluster = 0,
-            .release = Release.minimum,
-            .client = 1,
-            .ping_timestamp_monotonic = 0,
-        };
-        ping.set_checksum_body(&[0]u8{});
-        ping.set_checksum();
-
-        // The release of the built binary is not readily available, since it's set by
-        // `zig build scripts -- release`. Instead, the ping above is sent with
-        // .release == Release.minimum. This will always be below a release build's
-        // release_client_min, so expect the eviction.
-        var eviction: Header.Eviction = undefined;
-
-        const peer = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
-        const stream = try std.Io.net.tcpConnectToAddress(peer);
-        defer stream.close();
-
-        var writer = stream.writer();
-        try writer.writeAll(std.mem.asBytes(&ping)[0..@sizeOf(Header)]);
-
-        const reader = stream.reader();
-        _ = try reader.readAll(std.mem.asBytes(&eviction)[0..@sizeOf(Header)]);
-
-        assert(eviction.command == .eviction);
-        assert(eviction.valid_checksum());
-        assert(eviction.valid_checksum_body(&[0]u8{}));
-
-        const startup_time_ms = timer.read() / std.time.ns_per_ms;
+        const startup_time_ms = timer.read_ms();
 
         // While there's a running instance, check how long the repl takes to connect and run a
         // command.
@@ -303,7 +288,7 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
             .{ .port = port, .command = "create_accounts id=1 ledger=1 code=1" },
         );
 
-        const repl_single_command_ms = timer.read() / std.time.ns_per_ms;
+        const repl_single_command_ms = timer.read_ms();
 
         break :blk .{ startup_time_ms, repl_single_command_ms };
     };
@@ -410,14 +395,17 @@ fn upload_run(shell: *Shell, batch: *const MetricBatch) !void {
         try shell.exec("git reset --hard origin/main", .{});
 
         {
-            const file = try shell.cwd.openFile("./devhub/data.json", .{
-                .mode = .write_only,
+            const existing = try shell.cwd.readFileAlloc(
+                std.Options.debug_io,
+                "./devhub/data.json",
+                shell.arena.allocator(),
+                .limited(32 * MiB),
+            );
+            const appended = try shell.fmt("{s}{f}\n", .{ existing, std.json.fmt(batch, .{}) });
+            try shell.cwd.writeFile(std.Options.debug_io, .{
+                .sub_path = "./devhub/data.json",
+                .data = appended,
             });
-            defer file.close();
-
-            try file.seekFromEnd(0);
-            try std.json.stringify(batch, .{}, file.writer());
-            try file.writeAll("\n");
         }
 
         try shell.exec("git add ./devhub/data.json", .{});
@@ -454,11 +442,10 @@ const MetricBatch = struct {
 fn upload_nyrkio(shell: *Shell, batch: *const MetricBatch) !void {
     const url = "https://nyrkio.com/api/v0/result/devhub";
     const token = try shell.env_get("NYRKIO_TOKEN");
-    const payload = try std.json.stringifyAlloc(
-        shell.arena.allocator(),
-        [_]*const MetricBatch{batch}, // Nyrkiö needs an _array_ of batches.
+    const payload = try shell.fmt("{f}", .{std.json.fmt(
+        [_]*const MetricBatch{batch},
         .{},
-    );
+    )});
     _ = try shell.http_post(url, payload, .{
         .content_type = .json,
         .authorization = try shell.fmt("Bearer {s}", .{token}),

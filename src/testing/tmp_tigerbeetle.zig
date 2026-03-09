@@ -17,7 +17,7 @@ port: u16,
 /// For convenience, the same port pre-converted to string.
 port_str: []const u8,
 
-tmp_dir: std.testing.TmpDir,
+tmp_dir: []const u8,
 
 process: std.process.Child,
 
@@ -71,11 +71,11 @@ pub fn init(
     };
     errdefer gpa.free(tigerbeetle_exe);
 
-    var tmp_dir = std.testing.tmpDir(.{});
-    errdefer tmp_dir.cleanup();
-
-    const tmp_dir_path = try tmp_dir.dir.realPathFileAlloc(std.Options.debug_io, ".", gpa);
-    defer gpa.free(tmp_dir_path);
+    const tmp_dir_path = try gpa.dupe(u8, try shell.create_tmp_dir());
+    errdefer {
+        std.Io.Dir.deleteTree(std.Io.Dir.cwd(), std.Options.debug_io, tmp_dir_path) catch {};
+        gpa.free(tmp_dir_path);
+    }
 
     const data_file: []const u8 = try std.fs.path.join(gpa, &.{ tmp_dir_path, "0_0.tigerbeetle" });
     defer gpa.free(data_file);
@@ -130,7 +130,7 @@ pub fn init(
         .tigerbeetle_exe = tigerbeetle_exe,
         .port = port,
         .port_str = port_str,
-        .tmp_dir = tmp_dir,
+        .tmp_dir = tmp_dir_path,
         .process = process,
     };
 }
@@ -138,7 +138,8 @@ pub fn init(
 pub fn deinit(tb: *TmpTigerBeetle, gpa: std.mem.Allocator) void {
     tb.process.kill(std.Options.debug_io);
     gpa.free(tb.port_str);
-    tb.tmp_dir.cleanup();
+    std.Io.Dir.deleteTree(std.Io.Dir.cwd(), std.Options.debug_io, tb.tmp_dir) catch {};
+    gpa.free(tb.tmp_dir);
     gpa.free(tb.tigerbeetle_exe);
 }
 

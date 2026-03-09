@@ -195,7 +195,7 @@ const Section = struct {
         const elapsed_ns: u64 = @intCast(
             std.Io.Timestamp.now(std.Options.debug_io, .boot).nanoseconds - section.start_ns,
         );
-        std.debug.print("{s}: {}\n", .{ section.name, std.fmt.fmtDuration(elapsed_ns) });
+        std.debug.print("{s}: {} ms\n", .{ section.name, @divFloor(elapsed_ns, std.time.ns_per_ms) });
         if (section.ci) {
             var stdout_buffer: [128]u8 = undefined;
             var stdout_writer = std.Io.File.stdout().writer(std.Options.debug_io, &stdout_buffer);
@@ -380,7 +380,7 @@ pub fn find(shell: *Shell, options: FindOptions) ![]const []const u8 {
         var walker = try base_dir.walk(shell.gpa);
         defer walker.deinit();
 
-        while (try walker.next()) |entry| {
+        while (try walker.next(std.Options.debug_io)) |entry| {
             if (entry.kind == .file and find_filter_path(entry.path, options)) {
                 const full_path =
                     try std.fs.path.join(shell.arena.allocator(), &.{ base_path, entry.path });
@@ -421,9 +421,9 @@ pub fn copy_path(
         log.warn("failed to copy {s} to {s}", .{ src_path, dst_path });
     }
     if (std.fs.path.dirname(dst_path)) |dir| {
-        try dst_dir.makePath(std.Options.debug_io, dir);
+        try std.Io.Dir.createDirPath(dst_dir, std.Options.debug_io, dir);
     }
-    try src_dir.copyFile(std.Options.debug_io, src_path, dst_dir, dst_path, .{});
+    try src_dir.copyFile(src_path, dst_dir, dst_path, std.Options.debug_io, .{});
 }
 
 /// Runs the given command for side effects.
@@ -1008,57 +1008,39 @@ fn http_request(
         .{ @tagName(method), url, @errorName(err) },
     );
 
-    var client = std.http.Client{ .allocator = shell.gpa };
+    var client = std.http.Client{ .allocator = shell.gpa, .io = std.Options.debug_io };
     defer client.deinit();
 
-    const uri = try std.Uri.parse(url);
-    var header_buffer: [4 * stdx.KiB]u8 = undefined;
-    var request = try client.open(
-        switch (method) {
+    var response_body_writer: std.Io.Writer.Allocating = .init(shell.arena.allocator());
+
+    var headers: std.http.Client.Request.Headers = .{};
+    if (options.content_type) |content_type| {
+        headers.content_type = .{ .override = content_type.string() };
+    }
+    if (options.authorization) |authorization| {
+        headers.authorization = .{ .override = authorization };
+    }
+
+    const response = try client.fetch(.{
+        .location = .{ .url = url },
+        .method = switch (method) {
             .post => .POST,
             .get => .GET,
         },
-        uri,
-        .{ .server_header_buffer = &header_buffer },
-    );
-    defer request.deinit();
+        .payload = switch (method) {
+            .post => |body| body,
+            .get => null,
+        },
+        .headers = headers,
+        .response_writer = &response_body_writer.writer,
+    });
 
-    if (options.content_type) |content_type| {
-        request.headers.content_type = .{ .override = content_type.string() };
-    }
-
-    if (options.authorization) |authorization| {
-        request.headers.authorization = .{ .override = authorization };
-    }
-
-    if (method == .post) {
-        request.transfer_encoding = .{ .content_length = method.post.len };
-    }
-
-    try request.send();
-    if (method == .post) {
-        try request.writeAll(method.post);
-    }
-    try request.finish();
-    try request.wait();
-
-    const response_body_buffer_size = request.response.content_length orelse
-        options.response_body_size_max;
-
-    if (response_body_buffer_size > options.response_body_size_max) {
+    const response_body = response_body_writer.written();
+    if (response_body.len > options.response_body_size_max) {
         return error.ResponseTooLarge;
     }
 
-    const response_body_buffer = try shell.arena.allocator().alloc(u8, response_body_buffer_size);
-    const response_body_size = try request.readAll(response_body_buffer);
-    assert(response_body_size <= options.response_body_size_max);
-    const response_body = response_body_buffer[0..response_body_size];
-
-    if (request.response.content_length) |response_content_length| {
-        assert(response_content_length == response_body_size);
-    }
-
-    if (request.response.status != std.http.Status.ok) {
+    if (response.status != std.http.Status.ok) {
         log.err("response: {s}", .{response_body});
         return error.ResponseWrongStatus;
     }
@@ -1092,7 +1074,10 @@ pub fn unzip_executable(
 
     // Zig's std.zip.extract doesn't handle permissions.
     if (builtin.os.tag != .windows) {
-        try zip_extracted.chmod(std.Options.debug_io, 0o755);
+        try zip_extracted.setPermissions(
+            std.Options.debug_io,
+            std.Io.File.Permissions.fromMode(0o755),
+        );
     }
 }
 

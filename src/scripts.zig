@@ -77,7 +77,7 @@ const CLIArgs = union(enum) {
     ;
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     defer switch (gpa_allocator.deinit()) {
         .ok => {},
@@ -89,7 +89,7 @@ pub fn main() !void {
     const shell = try Shell.create(gpa);
     defer shell.destroy();
 
-    var args = try std.process.argsWithAllocator(gpa);
+    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, gpa);
     defer args.deinit();
 
     const cli_args = stdx.flags(&args, CLIArgs);

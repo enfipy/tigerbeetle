@@ -3,8 +3,6 @@ const assert = std.debug.assert;
 const ewah = @import("ewah.zig").ewah(usize);
 const stdx = @import("stdx");
 
-const log = std.log;
-
 const BitSetConfig = struct {
     words: usize,
     run_length_e: usize,
@@ -106,16 +104,17 @@ test "benchmark: ewah" {
             total_compressed += @as(f64, @floatFromInt(bitset_lengths[i]));
         }
 
-        log.info(
-            \\Words={:_>3} E(Run)={:_>3} E(Literal)={:_>3} EncTime={:_>6}ns DecTime={:_>6}ns Ratio={d:_>6.2}
-        , .{
-            config.words,
-            config.run_length_e,
-            config.literals_length_e,
-            encode_time,
-            decode_time,
-            total_uncompressed / total_compressed,
-        });
+        std.debug.print(
+            "Words={:_>3} E(Run)={:_>3} E(Literal)={:_>3} EncTime={:_>6}ns DecTime={:_>6}ns Ratio={d:_>6.2}\n",
+            .{
+                config.words,
+                config.run_length_e,
+                config.literals_length_e,
+                encode_time,
+                decode_time,
+                total_uncompressed / total_compressed,
+            },
+        );
     }
 }
 

@@ -104,9 +104,24 @@ fn parameter_fallible(
     assert(value_smoke < value_benchmark);
     return switch (mode) {
         .smoke => value_smoke,
-        .benchmark => std.process.parseEnvVarInt(name, u64, 10) catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => return value_benchmark,
-            else => |e| return e,
+        .benchmark => benchmark: {
+            const process_environ = if (std.Options.debug_threaded_io) |threaded|
+                threaded.environ.process_environ
+            else
+                std.process.Environ.empty;
+
+            const value_string = std.process.Environ.getAlloc(
+                process_environ,
+                std.heap.page_allocator,
+                name,
+            ) catch |err| switch (err) {
+                error.EnvironmentVariableMissing => break :benchmark value_benchmark,
+                error.OutOfMemory => @panic("out of memory"),
+                error.InvalidWtf8 => @panic("invalid benchmark parameter name"),
+            };
+            defer std.heap.page_allocator.free(value_string);
+
+            break :benchmark try std.fmt.parseInt(u64, value_string, 10);
         },
     };
 }

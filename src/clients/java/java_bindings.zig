@@ -965,17 +965,17 @@ pub fn main() !void {
         const ZigType = type_mapping[0];
         const mapping = type_mapping[1];
 
-        var buffer = std.ArrayList(u8).init(allocator);
+        var buffer = std.array_list.Managed(u8).init(allocator);
         try generate_bindings(ZigType, mapping, &buffer);
 
-        try target_dir.writeFile(.{
+        try target_dir.writeFile(std.Options.debug_io, .{
             .sub_path = mapping.name ++ ".java",
             .data = buffer.items,
         });
     }
 
     {
-        var buffer = std.ArrayList(u8).init(allocator);
+        var buffer = std.array_list.Managed(u8).init(allocator);
         try buffer.writer().print(
             \\package com.tigerbeetle;
             \\
@@ -988,7 +988,7 @@ pub fn main() !void {
             @sizeOf(exports.tb_client_t),
             @alignOf(exports.tb_client_t),
         });
-        try target_dir.writeFile(.{
+        try target_dir.writeFile(std.Options.debug_io, .{
             .sub_path = "TBClient.java",
             .data = buffer.items,
         });

@@ -439,9 +439,9 @@ fn run_cdc_test(
         },
     );
     defer {
-        const term = benchmark.wait() catch unreachable;
-        assert(term == .Exited);
-        assert(term.Exited == 0);
+        const term = benchmark.wait(std.Options.debug_io) catch unreachable;
+        assert(term == .exited);
+        assert(term.exited == 0);
     }
 
     // TODO: Improvements:
@@ -463,7 +463,7 @@ fn run_cdc_test(
             for (0..10) |attempt| {
                 if (attempt > 0) {
                     // Waiting for events:
-                    std.time.sleep(500 * std.time.ns_per_ms);
+                    try std.Io.sleep(std.Options.debug_io, .{ .nanoseconds = 500 * std.time.ns_per_ms }, .awake);
                 }
                 const events = try vsr_context.get_change_events(timestamp_previous + 1);
                 if (events.len > 0) break :events events;
@@ -502,7 +502,7 @@ fn run_cdc_test(
                 for (0..10) |attempt| {
                     if (attempt > 0) {
                         // Give the CDC job some time to finish publishing the messages.
-                        std.time.sleep(500 * std.time.ns_per_ms);
+                        try std.Io.sleep(std.Options.debug_io, .{ .nanoseconds = 500 * std.time.ns_per_ms }, .awake);
                     }
                     if (amqp_context.get_message(.{
                         .queue = queue,
@@ -600,7 +600,7 @@ fn run_timeout_test(
 
     const elapsed = time.monotonic().duration_since(started);
 
-    try testing.expectEqual(@as(u8, 1), result.Exited);
+    try testing.expectEqual(@as(u8, 1), result.exited);
     try testing.expect(elapsed.to_ms() > 1000);
 }
 
@@ -975,8 +975,8 @@ const TmpRabbitMQ = struct {
             "docker stop {id}",
             .{ .id = self.id },
         );
-        const term = self.process.wait() catch unreachable;
-        assert(term == .Exited);
+        const term = self.process.wait(std.Options.debug_io) catch unreachable;
+        assert(term == .exited);
     }
 };
 
@@ -1023,10 +1023,10 @@ fn try_execute(
     var exec_result: ?std.process.Child.RunResult = null;
     const attempt_max = 15;
     for (0..attempt_max) |attempt| {
-        if (attempt > 0) std.time.sleep(1 * std.time.ns_per_s);
+        if (attempt > 0) try std.Io.sleep(std.Options.debug_io, .{ .nanoseconds = 1 * std.time.ns_per_s }, .awake);
         exec_result = try shell.exec_raw(cmd, cmd_args);
         switch (exec_result.?.term) {
-            .Exited => |code| if (code == 0) return exec_result.?.stdout,
+            .exited => |code| if (code == 0) return exec_result.?.stdout,
             else => {},
         }
     }

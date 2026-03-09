@@ -74,9 +74,10 @@ pub fn main(shell: *Shell, gpa: std.mem.Allocator, cli_args: CLIArgs) !void {
     }
 
     const changelog_text = try shell.project_root.readFileAlloc(
-        shell.arena.allocator(),
+        std.Options.debug_io,
         "CHANGELOG.md",
-        1 * MiB,
+        shell.arena.allocator(),
+        .limited(1 * MiB),
     );
     var changelog_iteratator = changelog.ChangelogIterator.init(changelog_text);
     const release, const release_multiversion, const changelog_body = blk: {
@@ -177,17 +178,19 @@ fn build(shell: *Shell, languages: LanguageSet, info: VersionInfo, devhub: bool)
     var section = try shell.open_section("build all");
     defer section.close();
 
-    try shell.project_root.deleteTree("zig-out/dist");
-    var dist_dir = try shell.project_root.makeOpenPath("zig-out/dist", .{});
-    defer dist_dir.close();
+    try shell.project_root.deleteTree(std.Options.debug_io, "zig-out/dist");
+    try std.Io.Dir.createDirPath(shell.project_root, std.Options.debug_io, "zig-out/dist");
+    var dist_dir = try shell.project_root.openDir(std.Options.debug_io, "zig-out/dist", .{});
+    defer dist_dir.close(std.Options.debug_io);
 
     log.info("building TigerBeetle distribution into {s}", .{
-        try dist_dir.realpathAlloc(shell.arena.allocator(), "."),
+        try dist_dir.realPathFileAlloc(std.Options.debug_io, ".", shell.arena.allocator()),
     });
 
     if (languages.contains(.zig)) {
-        var dist_dir_tigerbeetle = try dist_dir.makeOpenPath("tigerbeetle", .{});
-        defer dist_dir_tigerbeetle.close();
+        try std.Io.Dir.createDirPath(dist_dir, std.Options.debug_io, "tigerbeetle");
+        var dist_dir_tigerbeetle = try dist_dir.openDir(std.Options.debug_io, "tigerbeetle", .{});
+        defer dist_dir_tigerbeetle.close(std.Options.debug_io);
 
         if (devhub) {
             try build_tigerbeetle_target(shell, info, dist_dir_tigerbeetle, false, "x86_64-linux");
@@ -195,8 +198,9 @@ fn build(shell: *Shell, languages: LanguageSet, info: VersionInfo, devhub: bool)
             try build_tigerbeetle(shell, info, dist_dir_tigerbeetle);
         }
 
-        var dist_dir_vortex = try dist_dir.makeOpenPath("vortex", .{});
-        defer dist_dir_vortex.close();
+        try std.Io.Dir.createDirPath(dist_dir, std.Options.debug_io, "vortex");
+        var dist_dir_vortex = try dist_dir.openDir(std.Options.debug_io, "vortex", .{});
+        defer dist_dir_vortex.close(std.Options.debug_io);
 
         const vortex_targets = .{
             "x86_64-linux",
@@ -208,36 +212,41 @@ fn build(shell: *Shell, languages: LanguageSet, info: VersionInfo, devhub: bool)
     }
 
     if (languages.contains(.dotnet)) {
-        var dist_dir_dotnet = try dist_dir.makeOpenPath("dotnet", .{});
-        defer dist_dir_dotnet.close();
+        try std.Io.Dir.createDirPath(dist_dir, std.Options.debug_io, "dotnet");
+        var dist_dir_dotnet = try dist_dir.openDir(std.Options.debug_io, "dotnet", .{});
+        defer dist_dir_dotnet.close(std.Options.debug_io);
 
         try build_dotnet(shell, info, dist_dir_dotnet);
     }
 
     if (languages.contains(.go)) {
-        var dist_dir_go = try dist_dir.makeOpenPath("go", .{});
-        defer dist_dir_go.close();
+        try std.Io.Dir.createDirPath(dist_dir, std.Options.debug_io, "go");
+        var dist_dir_go = try dist_dir.openDir(std.Options.debug_io, "go", .{});
+        defer dist_dir_go.close(std.Options.debug_io);
 
         try build_go(shell, info, dist_dir_go);
     }
 
     if (languages.contains(.java)) {
-        var dist_dir_java = try dist_dir.makeOpenPath("java", .{});
-        defer dist_dir_java.close();
+        try std.Io.Dir.createDirPath(dist_dir, std.Options.debug_io, "java");
+        var dist_dir_java = try dist_dir.openDir(std.Options.debug_io, "java", .{});
+        defer dist_dir_java.close(std.Options.debug_io);
 
         try build_java(shell, info, dist_dir_java);
     }
 
     if (languages.contains(.node)) {
-        var dist_dir_node = try dist_dir.makeOpenPath("node", .{});
-        defer dist_dir_node.close();
+        try std.Io.Dir.createDirPath(dist_dir, std.Options.debug_io, "node");
+        var dist_dir_node = try dist_dir.openDir(std.Options.debug_io, "node", .{});
+        defer dist_dir_node.close(std.Options.debug_io);
 
         try build_node(shell, info, dist_dir_node);
     }
 
     if (languages.contains(.python)) {
-        var dist_dir_python = try dist_dir.makeOpenPath("python", .{});
-        defer dist_dir_python.close();
+        try std.Io.Dir.createDirPath(dist_dir, std.Options.debug_io, "python");
+        var dist_dir_python = try dist_dir.openDir(std.Options.debug_io, "python", .{});
+        defer dist_dir_python.close(std.Options.debug_io);
 
         try build_python(shell, info, dist_dir_python);
     }
@@ -247,7 +256,7 @@ fn build(shell: *Shell, languages: LanguageSet, info: VersionInfo, devhub: bool)
     }
 }
 
-fn build_tigerbeetle(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
+fn build_tigerbeetle(shell: *Shell, info: VersionInfo, dist_dir: std.Io.Dir) !void {
     const targets = .{
         "x86_64-linux",
         "x86_64-windows",
@@ -265,7 +274,7 @@ fn build_tigerbeetle(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !vo
 fn build_tigerbeetle_target(
     shell: *Shell,
     info: VersionInfo,
-    dist_dir: std.fs.Dir,
+    dist_dir: std.Io.Dir,
     comptime debug: bool,
     comptime target: []const u8,
 ) !void {
@@ -317,8 +326,12 @@ fn build_tigerbeetle_target(
         assert(std.mem.indexOf(u8, output, build_mode) != null);
     }
 
-    const zip_file = try dist_dir.createFile(zip_name, .{ .truncate = false, .exclusive = true });
-    defer zip_file.close();
+    const zip_file = try dist_dir.createFile(
+        std.Options.debug_io,
+        zip_name,
+        .{ .truncate = false, .exclusive = true },
+    );
+    defer zip_file.close(std.Options.debug_io);
 
     try shell.zip_executable(
         zip_file,
@@ -333,7 +346,7 @@ fn build_tigerbeetle_target(
 fn build_vortex_driver_target(
     shell: *Shell,
     info: VersionInfo,
-    dist_dir: std.fs.Dir,
+    dist_dir: std.Io.Dir,
     comptime target: []const u8,
 ) !void {
     var section = try shell.open_section("build vortex:driver:zig - " ++ target);
@@ -351,8 +364,12 @@ fn build_vortex_driver_target(
     });
 
     const zip_name = try shell.fmt("vortex-driver-zig-{s}.zip", .{target});
-    const zip_file = try dist_dir.createFile(zip_name, .{ .truncate = false, .exclusive = true });
-    defer zip_file.close();
+    const zip_file = try dist_dir.createFile(
+        std.Options.debug_io,
+        zip_name,
+        .{ .truncate = false, .exclusive = true },
+    );
+    defer zip_file.close(std.Options.debug_io);
 
     try shell.pushd("./zig-out/bin");
     defer shell.popd();
@@ -367,7 +384,7 @@ fn build_vortex_driver_target(
     );
 }
 
-fn build_dotnet(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
+fn build_dotnet(shell: *Shell, info: VersionInfo, dist_dir: std.Io.Dir) !void {
     var section = try shell.open_section("build dotnet");
     defer section.close();
 
@@ -399,7 +416,7 @@ fn build_dotnet(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
     );
 }
 
-fn build_go(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
+fn build_go(shell: *Shell, info: VersionInfo, dist_dir: std.Io.Dir) !void {
     var section = try shell.open_section("build go");
     defer section.close();
 
@@ -445,10 +462,10 @@ fn build_go(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
         \\<https://github.com/tigerbeetle/tigerbeetle/tree/main/src/clients/go>
         \\for documentation and contributions.
     , .{ .sha = info.commit_sha });
-    try dist_dir.writeFile(.{ .sub_path = "README.md", .data = readme });
+    try dist_dir.writeFile(std.Options.debug_io, .{ .sub_path = "README.md", .data = readme });
 }
 
-fn build_java(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
+fn build_java(shell: *Shell, info: VersionInfo, dist_dir: std.Io.Dir) !void {
     var section = try shell.open_section("build java");
     defer section.close();
 
@@ -490,7 +507,7 @@ fn build_java(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
     );
 }
 
-fn build_node(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
+fn build_node(shell: *Shell, info: VersionInfo, dist_dir: std.Io.Dir) !void {
     var section = try shell.open_section("build node");
     defer section.close();
 
@@ -531,7 +548,7 @@ fn build_node(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
     );
 }
 
-fn build_python(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
+fn build_python(shell: *Shell, info: VersionInfo, dist_dir: std.Io.Dir) !void {
     var section = try shell.open_section("build python");
     defer section.close();
 
@@ -555,9 +572,10 @@ fn build_python(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
     defer backup_restore(shell.cwd, "pyproject.toml");
 
     const pyproject = try shell.cwd.readFileAlloc(
-        shell.arena.allocator(),
+        std.Options.debug_io,
         "pyproject.toml",
-        1 * MiB,
+        shell.arena.allocator(),
+        .limited(1 * MiB),
     );
     const version_line = try shell.fmt(
         "version = \"{s}\"",
@@ -572,7 +590,7 @@ fn build_python(shell: *Shell, info: VersionInfo, dist_dir: std.fs.Dir) !void {
     );
     assert(std.mem.indexOf(u8, pyproject_updated, version_line) != null);
 
-    try shell.cwd.writeFile(.{
+    try shell.cwd.writeFile(std.Options.debug_io, .{
         .sub_path = "pyproject.toml",
         .data = pyproject_updated,
     });
@@ -627,8 +645,8 @@ fn publish(
         log.info("gh version {s}", .{gh_version});
 
         const release_included_min = blk: {
-            shell.project_root.deleteFile("tigerbeetle") catch {};
-            defer shell.project_root.deleteFile("tigerbeetle") catch {};
+            shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle") catch {};
+            defer shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle") catch {};
 
             try shell.unzip_executable(
                 "zig-out/dist/tigerbeetle/tigerbeetle-x86_64-linux.zip",
@@ -636,11 +654,11 @@ fn publish(
             );
 
             const past_binary_contents = try shell.cwd.readFileAllocOptions(
-                shell.arena.allocator(),
+                std.Options.debug_io,
                 "tigerbeetle",
-                multiversion_binary_size_max,
-                null,
-                8,
+                shell.arena.allocator(),
+                .limited(multiversion_binary_size_max),
+                std.mem.Alignment.fromByteUnits(@alignOf(std.elf.Elf64_Ehdr)),
                 null,
             );
 
@@ -664,7 +682,7 @@ fn publish(
             \\### Supported upgrade versions
             \\
             \\Oldest supported client version: {[release_triple_client_min]s}
-            \\Oldest upgradable replica version: {[release_included_min]s}
+            \\Oldest upgradable replica version: {[release_included_min]}
             \\
             \\## Server
             \\
@@ -780,7 +798,7 @@ fn publish_go(shell: *Shell, info: VersionInfo) !void {
         \\  https://oauth2:{token}@github.com/tigerbeetle/tigerbeetle-go.git tigerbeetle-go
     , .{ .token = token });
     defer {
-        shell.project_root.deleteTree("tigerbeetle-go") catch {};
+        shell.project_root.deleteTree(std.Options.debug_io, "tigerbeetle-go") catch {};
     }
 
     const dist_files = try shell.find(.{ .where = &.{"zig-out/dist/go"} });
@@ -928,7 +946,7 @@ fn publish_docker(shell: *Shell, info: VersionInfo) !void {
         for (triples, docker_arches) |triple, docker_arch| {
             // We need to unzip binaries from dist. For simplicity, don't bother with a temporary
             // directory.
-            shell.project_root.deleteFile("tigerbeetle") catch {};
+            shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle") catch {};
 
             const zip_path = try shell.fmt(
                 "./zig-out/dist/tigerbeetle/tigerbeetle-{s}{s}.zip",
@@ -938,7 +956,9 @@ fn publish_docker(shell: *Shell, info: VersionInfo) !void {
 
             try shell.project_root.rename(
                 "tigerbeetle",
+                shell.project_root,
                 try shell.fmt("tigerbeetle-{s}", .{docker_arch}),
+                std.Options.debug_io,
             );
         }
         // Build docker container by copying pre-build executable inside.
@@ -1005,7 +1025,7 @@ fn publish_docs(shell: *Shell, info: VersionInfo) !void {
         \\  https://oauth2:{token}@github.com/tigerbeetle/docs.git tigerbeetle-docs
     , .{ .token = token });
     defer {
-        shell.project_root.deleteTree("tigerbeetle-docs") catch {};
+        shell.project_root.deleteTree(std.Options.debug_io, "tigerbeetle-docs") catch {};
     }
 
     const docs_files = try shell.find(.{ .where = &.{"src/docs_website/zig-out"} });
@@ -1046,12 +1066,12 @@ fn publish_docs(shell: *Shell, info: VersionInfo) !void {
     try shell.exec("git push origin main", .{});
 }
 
-fn backup_create(dir: std.fs.Dir, comptime file: []const u8) !void {
+fn backup_create(dir: std.Io.Dir, comptime file: []const u8) !void {
     try Shell.copy_path(dir, file, dir, file ++ ".backup");
 }
 
-fn backup_restore(dir: std.fs.Dir, comptime file: []const u8) void {
-    dir.deleteFile(file) catch {};
+fn backup_restore(dir: std.Io.Dir, comptime file: []const u8) void {
+    dir.deleteFile(std.Options.debug_io, file) catch {};
     Shell.copy_path(dir, file ++ ".backup", dir, file) catch {};
-    dir.deleteFile(file ++ ".backup") catch {};
+    dir.deleteFile(std.Options.debug_io, file ++ ".backup") catch {};
 }

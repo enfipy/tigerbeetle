@@ -6,8 +6,6 @@ const NodePoolType = @import("node_pool.zig").NodePoolType;
 const table_count_max_for_level = @import("tree.zig").table_count_max_for_level;
 const SortedSegmentedArrayType = @import("segmented_array.zig").SortedSegmentedArrayType;
 
-const log = std.log;
-
 // Bump this up if you want to use this as a real benchmark rather than as a test.
 const samples = 5_000;
 
@@ -131,8 +129,8 @@ test "benchmark: segmented array" {
             ),
         );
 
-        log.info(
-            "KeyType={} ValueCount={:_>7} ValueSize={:_>2}B NodeSize={:_>6}B LookupTime={:_>6}ns",
+        std.debug.print(
+            "KeyType={} ValueCount={:_>7} ValueSize={:_>2}B NodeSize={:_>6}B LookupTime={:_>6}ns\n",
             .{
                 options.Key,
                 options.value_count,
