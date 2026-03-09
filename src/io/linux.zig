@@ -122,11 +122,12 @@ pub const IO = struct {
         // We must use the same clock source used by io_uring (CLOCK_MONOTONIC) since we specify the
         // timeout below as an absolute value. Otherwise, we may deadlock if the clock sources are
         // dramatically different. Any kernel that supports io_uring will support CLOCK_MONOTONIC.
-        const current_ts = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch unreachable;
+        const current_ns = std.Io.Timestamp.now(std.Options.debug_io, .boot).toNanoseconds();
+        const timeout_ns = current_ns + nanoseconds;
         // The absolute CLOCK_MONOTONIC time after which we may return from this function:
         const timeout_ts: os.linux.kernel_timespec = .{
-            .sec = current_ts.sec,
-            .nsec = current_ts.nsec + nanoseconds,
+            .sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
+            .nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
         };
         var timeouts: usize = 0;
         var etime = false;
@@ -1194,16 +1195,19 @@ pub const IO = struct {
         // and has an `unreachable` on eg NetworkUnreachable and a few others. Tring to check this
         // before using the socket is race prone, so rather use sendto() directly to correctly
         // handle those cases.
-        return posix.sendto(
+        const send_flags: u32 = linux.MSG.DONTWAIT | linux.MSG.NOSIGNAL;
+        const rc = linux.sendto(
             socket,
-            buffer,
-            posix.MSG.DONTWAIT | posix.MSG.NOSIGNAL,
+            buffer.ptr,
+            buffer.len,
+            send_flags,
             null,
             0,
-        ) catch |err| switch (err) {
-            error.WouldBlock => return null,
-            // To avoid duplicating error handling, force the caller to fallback to normal send.
-            else => return null,
+        );
+        return switch (posix.errno(rc)) {
+            .SUCCESS => @intCast(rc),
+            .AGAIN => null,
+            else => null,
         };
     }
 
@@ -1332,15 +1336,13 @@ pub const IO = struct {
         _ = self;
 
         // eventfd initialized with no (zero) previous write value.
-        const event_fd = posix.eventfd(0, linux.EFD.CLOEXEC) catch |err| switch (err) {
-            error.SystemResources,
-            error.SystemFdQuotaExceeded,
-            error.ProcessFdQuotaExceeded,
-            => return error.SystemResources,
-            error.Unexpected => return error.Unexpected,
+        const event_fd = switch (posix.errno(linux.eventfd(0, linux.EFD.CLOEXEC))) {
+            .SUCCESS => |fd| @as(Event, @intCast(@intFromEnum(fd))),
+            .NFILE, .NOBUFS, .NOMEM, .MFILE => return error.SystemResources,
+            else => |err| return stdx.unexpected_errno("eventfd", err),
         };
         assert(event_fd != INVALID_EVENT);
-        errdefer os.close(event_fd);
+        errdefer _ = linux.close(event_fd);
 
         return event_fd;
     }
@@ -1384,7 +1386,8 @@ pub const IO = struct {
         _ = completion;
 
         const value: u64 = 1;
-        const bytes = posix.write(event, std.mem.asBytes(&value)) catch unreachable;
+        const bytes = linux.write(event, std.mem.asBytes(&value).ptr, @sizeOf(u64));
+        assert(posix.errno(bytes) == .SUCCESS);
         assert(bytes == @sizeOf(u64));
     }
 
@@ -1392,7 +1395,7 @@ pub const IO = struct {
         assert(event != INVALID_EVENT);
         _ = self;
 
-        posix.close(event);
+        _ = linux.close(event);
     }
 
     pub const socket_t = posix.socket_t;
@@ -1462,13 +1465,39 @@ pub const IO = struct {
         return common.listen(fd, address, options);
     }
 
-    pub fn shutdown(_: *IO, socket: socket_t, how: posix.ShutdownHow) posix.ShutdownError!void {
-        return posix.shutdown(socket, how);
+    pub const ShutdownError = error{
+        SocketNotConnected,
+        ConnectionAborted,
+        ConnectionResetByPeer,
+        BlockingOperationInProgress,
+        NetworkSubsystemFailed,
+        SystemResources,
+        Unexpected,
+    };
+
+    pub fn shutdown(_: *IO, socket: socket_t, how: std.Io.net.ShutdownHow) ShutdownError!void {
+        const how_c: c_int = switch (how) {
+            .recv => posix.SHUT.RD,
+            .send => posix.SHUT.WR,
+            .both => posix.SHUT.RDWR,
+        };
+
+        switch (posix.errno(linux.shutdown(socket, how_c))) {
+            .SUCCESS => {},
+            .CONNABORTED => return error.ConnectionAborted,
+            .CONNRESET => return error.ConnectionResetByPeer,
+            .NETDOWN => return error.NetworkSubsystemFailed,
+            .NOTCONN => return error.SocketNotConnected,
+            .INPROGRESS => return error.BlockingOperationInProgress,
+            .NOBUFS, .NOMEM => return error.SystemResources,
+            else => |err| return stdx.unexpected_errno("shutdown", err),
+        }
     }
 
     /// Opens a directory with read only access.
     pub fn open_dir(dir_path: []const u8) !fd_t {
-        return posix.open(dir_path, .{ .CLOEXEC = true, .ACCMODE = .RDONLY }, 0);
+        const dir = try std.Io.Dir.cwd().openDir(std.Options.debug_io, dir_path, .{});
+        return dir.handle;
     }
 
     pub const fd_t = posix.fd_t;
@@ -1506,10 +1535,10 @@ pub const IO = struct {
         var mode: posix.mode_t = 0;
 
         const kind: enum { file, block_device } = blk: {
-            const stat = posix.fstatat(
-                dir_fd,
+            const stat = (std.Io.Dir{ .handle = dir_fd }).statFile(
+                std.Options.debug_io,
                 relative_path,
-                0,
+                .{},
             ) catch |err| switch (err) {
                 error.FileNotFound => {
                     if (purpose == .format) {
@@ -1523,10 +1552,10 @@ pub const IO = struct {
                 },
                 else => |err_| return err_,
             };
-            if (posix.S.ISBLK(stat.mode)) {
+            if (stat.kind == .block_device) {
                 break :blk .block_device;
             } else {
-                if (!posix.S.ISREG(stat.mode)) {
+                if (stat.kind != .file) {
                     @panic("file path does not point to block device or regular file.");
                 }
                 break :blk .file;
@@ -1613,14 +1642,14 @@ pub const IO = struct {
 
         const fd = try posix.openat(dir_fd, relative_path, flags, mode);
         // TODO Return a proper error message when the path exists or does not exist (init/start).
-        errdefer posix.close(fd);
+        errdefer _ = linux.close(fd);
 
         {
             // Make sure we're getting the type of file descriptor we expect.
-            const stat = try posix.fstat(fd);
+            const stat = try (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).stat(std.Options.debug_io);
             switch (kind) {
-                .file => assert(posix.S.ISREG(stat.mode)),
-                .block_device => assert(posix.S.ISBLK(stat.mode)),
+                .file => assert(stat.kind == .file),
+                .block_device => assert(stat.kind == .block_device),
             }
         }
 
@@ -1637,19 +1666,27 @@ pub const IO = struct {
         // has terminated.
         const lock_acquired = blk: {
             for (0..2) |_| {
-                posix.flock(fd, posix.LOCK.EX | posix.LOCK.NB) catch |err| switch (err) {
-                    error.WouldBlock => {
-                        std.time.sleep(50 * std.time.ns_per_ms);
+                switch (posix.errno(linux.flock(fd, posix.LOCK.EX | posix.LOCK.NB))) {
+                    .SUCCESS => {},
+                    .AGAIN => {
+                        try std.Io.sleep(
+                            std.Options.debug_io,
+                            .{ .nanoseconds = 50 * std.time.ns_per_ms },
+                            .awake,
+                        );
                         continue;
                     },
-                    else => return err,
-                };
+                    .OPNOTSUPP => return error.FileLocksUnsupported,
+                    else => |err| return stdx.unexpected_errno("flock", err),
+                }
                 break :blk true;
             } else {
-                posix.flock(fd, posix.LOCK.EX | posix.LOCK.NB) catch |err| switch (err) {
-                    error.WouldBlock => break :blk false,
-                    else => return err,
-                };
+                switch (posix.errno(linux.flock(fd, posix.LOCK.EX | posix.LOCK.NB))) {
+                    .SUCCESS => {},
+                    .AGAIN => break :blk false,
+                    .OPNOTSUPP => return error.FileLocksUnsupported,
+                    else => |err| return stdx.unexpected_errno("flock", err),
+                }
                 break :blk true;
             }
         };
@@ -1674,7 +1711,7 @@ pub const IO = struct {
         // If the file system does not support `fallocate()`, then this could mean more seeks or a
         // panic if we run out of disk space (ENOSPC).
         if (purpose == .format and kind == .file) {
-            log.info("allocating {}...", .{std.fmt.fmtIntSizeBin(size)});
+            log.info("allocating {} bytes...", .{size});
             fs_allocate(fd, size) catch |err| switch (err) {
                 error.OperationNotSupported => {
                     log.warn("file system does not support fallocate(), an ENOSPC will panic", .{});
@@ -1689,7 +1726,24 @@ pub const IO = struct {
                     const write_offset = size - sector.len;
                     var written: usize = 0;
                     while (written < sector.len) {
-                        written += try posix.pwrite(fd, sector[written..], write_offset + written);
+                        const iovec = [1]std.posix.iovec_const{.{
+                            .base = sector[written..].ptr,
+                            .len = sector.len - written,
+                        }};
+                        const rc = os.linux.pwritev(
+                            fd,
+                            &iovec,
+                            iovec.len,
+                            @intCast(write_offset + written),
+                        );
+                        written += switch (posix.errno(rc)) {
+                            .SUCCESS => @intCast(rc),
+                            .INTR => continue,
+                            .NOSPC => return error.NoSpaceLeft,
+                            .FBIG => return error.FileTooBig,
+                            .INVAL => return error.Unseekable,
+                            else => |errno| return stdx.unexpected_errno("pwritev", errno),
+                        };
                     }
                 },
                 else => |e| return e,
@@ -1700,16 +1754,16 @@ pub const IO = struct {
         // making decisions on data that was never durably written by a previously crashed process.
         // We therefore always fsync when we open the path, also to wait for any pending O_DSYNC.
         // Thanks to Alex Miller from FoundationDB for diving into our source and pointing this out.
-        try posix.fsync(fd);
+        try (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).sync(std.Options.debug_io);
 
         // We fsync the parent directory to ensure that the file inode is durably written.
         // The caller is responsible for the parent directory inode stored under the grandparent.
         // We always do this when opening because we don't know if this was done before crashing.
-        try posix.fsync(dir_fd);
+        try (std.Io.File{ .handle = dir_fd, .flags = .{ .nonblocking = false } }).sync(std.Options.debug_io);
 
         switch (kind) {
             .file => {
-                if ((try posix.fstat(fd)).size < size) {
+                if ((try (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).stat(std.Options.debug_io)).size < size) {
                     @panic("data file inode size was truncated or corrupted");
                 }
             },
@@ -1717,7 +1771,7 @@ pub const IO = struct {
                 const BLKGETSIZE64 = os.linux.IOCTL.IOR(0x12, 114, usize);
                 var block_device_size: usize = 0;
 
-                switch (os.linux.E.init(os.linux.ioctl(
+                switch (posix.errno(os.linux.ioctl(
                     fd,
                     BLKGETSIZE64,
                     @intFromPtr(&block_device_size),
@@ -1735,8 +1789,8 @@ pub const IO = struct {
                     std.debug.panic(
                         "The block device used is too small ({} available/{} needed).",
                         .{
-                            std.fmt.fmtIntSizeBin(block_device_size),
-                            std.fmt.fmtIntSizeBin(size),
+                            block_device_size,
+                            size,
                         },
                     );
                 }
@@ -1763,12 +1817,19 @@ pub const IO = struct {
                             "Superblock on block device not empty. " ++
                                 "If this is the correct block device to use, " ++
                                 "please zero the first {} using a tool like dd.",
-                            .{std.fmt.fmtIntSizeBin(superblock_zone_size)},
+                            .{superblock_zone_size},
                         );
                     }
                     // Reset position in the block device to compensate for read(2).
-                    try posix.lseek_CUR(fd, -superblock_zone_size);
-                    assert(try posix.lseek_CUR_get(fd) == 0);
+                    switch (posix.errno(linux.lseek(fd, -superblock_zone_size, std.c.SEEK.CUR))) {
+                        .SUCCESS => {},
+                        else => |err| return stdx.unexpected_errno("lseek", err),
+                    }
+                    const offset = linux.lseek(fd, 0, std.c.SEEK.CUR);
+                    switch (posix.errno(offset)) {
+                        .SUCCESS => assert(offset == 0),
+                        else => |err| return stdx.unexpected_errno("lseek", err),
+                    }
                 }
             },
         }
@@ -1783,7 +1844,7 @@ pub const IO = struct {
 
         while (true) {
             const res = stdx.fstatfs(dir_fd, &statfs);
-            switch (os.linux.E.init(res)) {
+            switch (posix.errno(res)) {
                 .SUCCESS => {
                     return statfs.f_type == stdx.TmpfsMagic;
                 },
@@ -1799,21 +1860,22 @@ pub const IO = struct {
         if (!@hasField(posix.O, "DIRECT")) return false;
 
         var cookie: [16]u8 = @splat('0');
-        _ = stdx.array_print(16, &cookie, "{0x}", .{std.crypto.random.int(u64)});
+        const random = (std.Random.IoSource{ .io = std.Options.debug_io }).interface();
+        _ = stdx.array_print(16, &cookie, "{0x}", .{random.int(u64)});
 
         const path: [:0]const u8 = "fs_supports_direct_io-" ++ cookie ++ "";
-        const dir = std.fs.Dir{ .fd = dir_fd };
+        const dir = std.Io.Dir{ .handle = dir_fd };
         const flags: posix.O = .{ .CLOEXEC = true, .CREAT = true, .TRUNC = true };
         const fd = try posix.openatZ(dir_fd, path, flags, 0o666);
-        defer posix.close(fd);
-        defer dir.deleteFile(path) catch {};
+        defer _ = linux.close(fd);
+        defer dir.deleteFile(std.Options.debug_io, path) catch {};
 
         while (true) {
             const dir_flags: posix.O = .{ .CLOEXEC = true, .ACCMODE = .RDONLY, .DIRECT = true };
             const res = os.linux.openat(dir_fd, path, dir_flags, 0);
-            switch (os.linux.E.init(res)) {
+            switch (posix.errno(res)) {
                 .SUCCESS => {
-                    posix.close(@intCast(res));
+                    _ = linux.close(@intCast(res));
                     return true;
                 },
                 .INTR => continue,
@@ -1832,7 +1894,7 @@ pub const IO = struct {
 
         while (true) {
             const rc = os.linux.fallocate(fd, mode, offset, length);
-            switch (os.linux.E.init(rc)) {
+            switch (posix.errno(rc)) {
                 .SUCCESS => return,
                 .BADF => return error.FileDescriptorInvalid,
                 .FBIG => return error.FileTooBig,

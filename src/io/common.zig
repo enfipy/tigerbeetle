@@ -36,7 +36,10 @@ pub fn listen(
     var bind_storage: std.Io.Threaded.PosixAddress = undefined;
     const bind_len = std.Io.Threaded.addressToPosix(&address, &bind_storage);
     while (true) {
-        switch (posix.errno(std.c.bind(fd, &bind_storage.any, bind_len))) {
+        switch (if (builtin.os.tag == .linux)
+            posix.errno(std.os.linux.bind(fd, &bind_storage.any, bind_len))
+        else
+            posix.errno(std.c.bind(fd, &bind_storage.any, bind_len))) {
             .SUCCESS => break,
             .INTR => continue,
             else => |err| return stdx.unexpected_errno("bind", err),
@@ -47,7 +50,10 @@ pub fn listen(
     var address_storage: std.Io.Threaded.PosixAddress = undefined;
     var addrlen: posix.socklen_t = @sizeOf(std.Io.Threaded.PosixAddress);
     while (true) {
-        switch (posix.errno(std.c.getsockname(fd, &address_storage.any, &addrlen))) {
+        switch (if (builtin.os.tag == .linux)
+            posix.errno(std.os.linux.getsockname(fd, &address_storage.any, &addrlen))
+        else
+            posix.errno(std.c.getsockname(fd, &address_storage.any, &addrlen))) {
             .SUCCESS => break,
             .INTR => continue,
             else => |err| return stdx.unexpected_errno("getsockname", err),
@@ -59,7 +65,10 @@ pub fn listen(
         std.Io.Threaded.posixAddressFamily(&address));
 
     while (true) {
-        switch (posix.errno(std.c.listen(fd, @intCast(options.backlog)))) {
+        switch (if (builtin.os.tag == .linux)
+            posix.errno(std.os.linux.listen(fd, options.backlog))
+        else
+            posix.errno(std.c.listen(fd, @intCast(options.backlog)))) {
             .SUCCESS => break,
             .INTR => continue,
             else => |err| return stdx.unexpected_errno("listen", err),
@@ -152,7 +161,10 @@ pub const AOFBlockingWriteError = error{
 pub fn aof_blocking_write_all(fd: posix.fd_t, buffer: []const u8) AOFBlockingWriteError!void {
     var offset: usize = 0;
     while (offset < buffer.len) {
-        const n = std.c.write(fd, buffer[offset..].ptr, buffer.len - offset);
+        const n = if (builtin.os.tag == .linux)
+            std.os.linux.write(fd, buffer[offset..].ptr, buffer.len - offset)
+        else
+            std.c.write(fd, buffer[offset..].ptr, buffer.len - offset);
         switch (posix.errno(n)) {
             .SUCCESS => offset += @intCast(n),
             .AGAIN => return error.WouldBlock,
@@ -217,7 +229,7 @@ pub fn aof_blocking_pread_all(
 }
 
 pub fn aof_blocking_close(fd: posix.fd_t) void {
-    _ = std.c.close(fd);
+    (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).close(std.Options.debug_io);
 }
 
 pub const AOFBlockingStatError = std.Io.Dir.StatFileError;
@@ -236,7 +248,7 @@ pub fn aof_blocking_fstat(fd: posix.fd_t) AOFBlockingFStatError!std.Io.File.Stat
     return file.stat(std.Options.debug_io);
 }
 
-pub const AOFBlockingOpenError = posix.OpenError || posix.UnexpectedError;
+pub const AOFBlockingOpenError = posix.OpenError || std.Io.File.SyncError || posix.UnexpectedError;
 
 pub fn aof_blocking_open(dir_fd: posix.fd_t, path: []const u8) AOFBlockingOpenError!posix.fd_t {
     assert(!std.fs.path.isAbsolute(path));
@@ -246,25 +258,20 @@ pub fn aof_blocking_open(dir_fd: posix.fd_t, path: []const u8) AOFBlockingOpenEr
         .CLOEXEC = true,
         .ACCMODE = .RDWR,
     }, 0o666);
-    errdefer _ = std.c.close(fd);
+    errdefer (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).close(std.Options.debug_io);
 
-    switch (posix.errno(std.c.fsync(fd))) {
-        .SUCCESS => {},
-        else => |err| return stdx.unexpected_errno("fsync", err),
-    }
+    try (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).sync(std.Options.debug_io);
 
     // We cannot fsync the directory handle on Windows.
     // We have no way to open a directory with write access.
     if (builtin.os.tag != .windows) {
-        switch (posix.errno(std.c.fsync(dir_fd))) {
-            .SUCCESS => {},
-            else => |err| return stdx.unexpected_errno("fsync", err),
-        }
+        try (std.Io.File{ .handle = dir_fd, .flags = .{ .nonblocking = false } }).sync(std.Options.debug_io);
     }
 
-    const seek_rc = std.c.lseek(fd, 0, std.c.SEEK.END);
-    if (seek_rc < 0) {
-        return stdx.unexpected_errno("lseek", posix.errno(seek_rc));
+    const seek_rc = std.os.linux.lseek(fd, 0, std.c.SEEK.END);
+    switch (posix.errno(seek_rc)) {
+        .SUCCESS => {},
+        else => |err| return stdx.unexpected_errno("lseek", err),
     }
 
     return fd;

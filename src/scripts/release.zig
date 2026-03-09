@@ -379,7 +379,7 @@ fn build_vortex_driver_target(
         .{
             .executable_name = "vortex-driver-zig",
             .executable_mtime = info.commit_timestamp,
-            .max_size = 16 * MiB,
+            .max_size = 64 * MiB,
         },
     );
 }

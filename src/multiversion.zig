@@ -123,7 +123,7 @@ fn fd_pread_all(fd: posix.fd_t, buffer: []u8, offset: u64) !usize {
     var bytes_read: usize = 0;
     while (bytes_read < buffer.len) {
         const offset_n: posix.off_t = @intCast(offset + bytes_read);
-        const rc = std.c.pread(fd, buffer[bytes_read..].ptr, buffer.len - bytes_read, offset_n);
+        const rc = os.linux.pread(fd, buffer[bytes_read..].ptr, buffer.len - bytes_read, offset_n);
         const n = switch (posix.errno(rc)) {
             .SUCCESS => @as(usize, @intCast(rc)),
             .INTR => continue,
@@ -1437,7 +1437,7 @@ pub const MultiversionOS = struct {
         try fd_pwrite_all(self.target_fd, self.source_buffer[0..binary_size], 0);
 
         // Zero the remaining bytes in the file.
-        switch (posix.errno(std.c.ftruncate(self.target_fd, @intCast(binary_size)))) {
+        switch (posix.errno(std.os.linux.ftruncate(self.target_fd, @intCast(binary_size)))) {
             .SUCCESS => {},
             else => |err| return stdx.unexpected_errno("ftruncate", err),
         }

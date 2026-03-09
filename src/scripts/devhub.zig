@@ -29,6 +29,7 @@
 //!
 //! (Also need to update the DEVHUBDB_PAT environment variable passed to the CFO supervisors.)
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 
 const stdx = @import("stdx");
@@ -182,12 +183,18 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
             \\    --language=zig --devhub
         , .{ .sha = cli_args.sha });
     }
-    try shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle");
+    shell.project_root.deleteFile(std.Options.debug_io, "tigerbeetle") catch {};
 
-    try shell.unzip_executable(
-        "zig-out/dist/tigerbeetle/tigerbeetle-x86_64-linux.zip",
-        "tigerbeetle",
-    );
+    switch (builtin.os.tag) {
+        .linux => try shell.unzip_executable(
+            "zig-out/dist/tigerbeetle/tigerbeetle-x86_64-linux.zip",
+            "tigerbeetle",
+        ),
+        .macos => try shell.exec_zig("build -Drelease install", .{}),
+        else => return error.UnsupportedPlatform,
+    }
+
+    shell.cwd.deleteFile(std.Options.debug_io, "datafile-devhub") catch {};
 
     // `--log-debug-replica` is explicitly enabled, to measure the performance hit from debug
     // logging and count the log lines.
@@ -215,8 +222,8 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
     const batch_p100_ms = try get_measurement(benchmark_result, "batch latency p100", "ms");
     const query_p100_ms = try get_measurement(benchmark_result, "query latency p100", "ms");
     const rss_bytes = try get_measurement(benchmark_result, "rss", "bytes");
-    const datafile_bytes = try get_measurement(benchmark_result, "datafile", "bytes");
-    const datafile_empty_bytes = try get_measurement(benchmark_result, "datafile empty", "bytes");
+    const datafile_bytes = try get_measurement(benchmark_stderr, "datafile", "bytes");
+    const datafile_empty_bytes = try get_measurement(benchmark_stderr, "datafile empty", "bytes");
     const checksum_message_size_max_us = try get_measurement(
         benchmark_result,
         "checksum message size max",
@@ -370,11 +377,16 @@ fn get_measurement(
         std.log.err("can't extract '" ++ label ++ "' measurement", .{});
     }
 
-    _, const rest = stdx.cut(benchmark_stdout, label ++ " = ") orelse
-        return error.BadMeasurement;
-    const value_string, _ = stdx.cut(rest, " " ++ unit) orelse return error.BadMeasurement;
+    var lines = std.mem.splitScalar(u8, benchmark_stdout, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, label ++ " = ")) continue;
 
-    return try std.fmt.parseInt(u64, value_string, 10);
+        _, const rest = stdx.cut(line, label ++ " = ").?;
+        const value_string, _ = stdx.cut(rest, " " ++ unit) orelse return error.BadMeasurement;
+        return try std.fmt.parseInt(u64, value_string, 10);
+    }
+
+    return error.BadMeasurement;
 }
 
 fn upload_run(shell: *Shell, batch: *const MetricBatch) !void {

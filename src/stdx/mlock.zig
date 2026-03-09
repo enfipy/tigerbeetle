@@ -33,7 +33,7 @@ fn memory_lock_allocated_linux() MemoryLockError!void {
     const MCL_CURRENT = 1; // Lock all currently mapped pages.
     const MCL_ONFAULT = 4; // Lock all pages faulted in (i.e. stack space).
     const result = os.linux.syscall1(.mlockall, MCL_CURRENT | MCL_ONFAULT);
-    switch (os.linux.E.init(result)) {
+    switch (std.posix.errno(result)) {
         .SUCCESS => return,
         .AGAIN => log.warn(mlockall_error, .{"some addresses could not be locked"}),
         .NOMEM => log.warn(mlockall_error, .{"memory would exceed RLIMIT_MEMLOCK"}),

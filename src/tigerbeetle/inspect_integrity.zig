@@ -145,11 +145,10 @@ fn init(
     });
     errdefer integrity.storage.deinit();
 
-    var data_file_stat: std.c.Stat = undefined;
-    switch (std.posix.errno(std.c.fstat(integrity.storage.fd, &data_file_stat))) {
-        .SUCCESS => {},
-        else => |err| return stdx.unexpected_errno("fstat", err),
-    }
+    const data_file_stat = try (std.Io.File{
+        .handle = integrity.storage.fd,
+        .flags = .{ .nonblocking = false },
+    }).stat(std.Options.debug_io);
 
     integrity.superblock = try SuperBlock.init(
         gpa,
@@ -157,7 +156,7 @@ fn init(
         .{
             .storage_size_limit = std.mem.alignForward(
                 u64,
-                @intCast(data_file_stat.size),
+                data_file_stat.size,
                 constants.block_size,
             ),
         },

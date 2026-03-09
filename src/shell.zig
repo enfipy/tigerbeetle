@@ -1115,19 +1115,35 @@ pub fn zip_executable(
 
     var bytes_written: usize = 0;
 
-    const executable = try std.Io.Dir.readFileAlloc(
-        shell.cwd,
+    const executable_stat = try shell.cwd.statFile(
         std.Options.debug_io,
         input.executable_name,
-        shell.gpa,
-        .limited(input.max_size),
+        .{},
     );
+    if (executable_stat.size > input.max_size) return error.StreamTooLong;
+    const executable_size: usize = @intCast(executable_stat.size);
+
+    const executable = try shell.gpa.alloc(u8, executable_size);
     defer shell.gpa.free(executable);
+
+    const executable_file = try shell.cwd.openFile(
+        std.Options.debug_io,
+        input.executable_name,
+        .{},
+    );
+    defer executable_file.close(std.Options.debug_io);
+
+    const executable_bytes_read = try executable_file.readPositionalAll(
+        std.Options.debug_io,
+        executable,
+        0,
+    );
+    assert(executable_bytes_read == executable_size);
 
     const executable_mtime_dos = unix_to_dos_timestamp(input.executable_mtime);
     const crc32 = std.hash.Crc32.hash(executable);
 
-    const executable_deflated_buffer = try shell.gpa.alloc(u8, input.max_size);
+    const executable_deflated_buffer = try shell.gpa.alloc(u8, executable_size);
     defer shell.gpa.free(executable_deflated_buffer);
 
     const executable_deflated = blk: {
