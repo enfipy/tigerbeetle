@@ -71,6 +71,10 @@ pub const CLIArgs = struct {
     seed: ?u64 = null,
 };
 
+fn now_ns() i128 {
+    return @intCast(std.Io.Timestamp.now(std.Options.debug_io, .boot).nanoseconds);
+}
+
 pub fn main(allocator: std.mem.Allocator, args: CLIArgs) !void {
     if (builtin.os.tag == .windows) {
         log.err("vortex is not supported on Windows", .{});
@@ -78,11 +82,22 @@ pub fn main(allocator: std.mem.Allocator, args: CLIArgs) !void {
     }
 
     if (args.log) |log_path| {
-        const log_file = try std.fs.cwd().createFile(log_path, .{});
-        defer log_file.close();
+        const log_file = try std.Io.Dir.createFile(
+            std.Io.Dir.cwd(),
+            std.Options.debug_io,
+            log_path,
+            .{},
+        );
+        defer log_file.close(std.Options.debug_io);
 
         // Redirect stderr to the file.
-        try std.posix.dup2(log_file.handle, std.posix.STDERR_FILENO);
+        while (true) {
+            switch (std.posix.errno(std.c.dup2(log_file.handle, std.posix.STDERR_FILENO))) {
+                .SUCCESS => break,
+                .INTR => continue,
+                else => |err| return stdx.unexpected_errno("dup2", err),
+            }
+        }
     }
 
     if (builtin.os.tag == .linux) {
@@ -100,7 +115,7 @@ pub fn main(allocator: std.mem.Allocator, args: CLIArgs) !void {
     defer shell.destroy();
 
     // By default, the shell uses project root as cwd, but we want to use the actual process cwd.
-    try shell.pushd_dir(std.fs.cwd());
+    try shell.pushd_dir(std.Io.Dir.cwd());
     defer shell.popd();
 
     var io = try IO.init(128, 0);
@@ -109,7 +124,7 @@ pub fn main(allocator: std.mem.Allocator, args: CLIArgs) !void {
     const output_directory = args.output_directory orelse try shell.create_tmp_dir();
     defer {
         if (args.output_directory == null) {
-            shell.cwd.deleteTree(output_directory) catch |err| {
+            shell.cwd.deleteTree(std.Options.debug_io, output_directory) catch |err| {
                 log.err("error deleting tree: {}", .{err});
             };
         }
@@ -118,7 +133,9 @@ pub fn main(allocator: std.mem.Allocator, args: CLIArgs) !void {
     log.info("output directory: {s}", .{output_directory});
     log.info("starting test with target runtime of {}", .{args.test_duration});
 
-    const seed = args.seed orelse std.crypto.random.int(u64);
+    var seed_bytes: [8]u8 = undefined;
+    std.Options.debug_io.random(&seed_bytes);
+    const seed = args.seed orelse std.mem.readInt(u64, &seed_bytes, .little);
     var prng = stdx.PRNG.from_seed(seed);
 
     var network = try faulty_network.Network.listen(
@@ -246,7 +263,7 @@ const Supervisor = struct {
             .replicas = options.replicas,
             .workload = options.workload,
             .prng = options.prng,
-            .test_deadline = std.time.nanoTimestamp() + options.test_duration.ns,
+            .test_deadline = now_ns() + options.test_duration.ns,
             .faulty = options.faulty,
         };
         return supervisor;
@@ -270,10 +287,10 @@ const Supervisor = struct {
         // How many replicas can be faulty while still expecting the cluster to
         // make progress (based on 2f+1).
         const liveness_faulty_replicas_max = @divFloor(supervisor.replicas.len - 1, 2);
-        const workload_result = while (std.time.nanoTimestamp() < supervisor.test_deadline) {
+        const workload_result = while (now_ns() < supervisor.test_deadline) {
             supervisor.network.tick();
             try supervisor.io.run_for_ns(constants.vsr.tick_ms * std.time.ns_per_ms);
-            const now: u64 = @intCast(std.time.nanoTimestamp());
+            const now: u64 = @intCast(now_ns());
 
             const running_replicas =
                 replicas_in_state(supervisor.replicas, &running_replicas_buffer, .running);
@@ -314,7 +331,7 @@ const Supervisor = struct {
             {
                 // We have an acceptable number of faults, so we require liveness (after some time).
                 if (acceptable_faults_start_ns == null) {
-                    acceptable_faults_start_ns = @intCast(std.time.nanoTimestamp());
+                    acceptable_faults_start_ns = @intCast(now_ns());
                     supervisor.workload.requests_finished.clear();
                 }
             } else {
@@ -353,7 +370,7 @@ const Supervisor = struct {
                     .sleep => {
                         const duration =
                             supervisor.prng.int_inclusive(u64, 10 * std.time.ns_per_s);
-                        log.info("sleeping for {}", .{std.fmt.fmtDuration(duration)});
+                        log.info("sleeping for {d}ms", .{@divFloor(duration, std.time.ns_per_ms)});
                         sleep_deadline = now + duration;
                     },
                     .replica_terminate => {
@@ -407,8 +424,8 @@ const Supervisor = struct {
                         for (paused_replicas) |paused| try paused.replica.unpause();
                         for (terminated_replicas) |terminated| try terminated.replica.start();
 
-                        log.info("going into {} quiescence (no faults)", .{
-                            std.fmt.fmtDuration(duration),
+                        log.info("going into {d}ms quiescence (no faults)", .{
+                            @divFloor(duration, std.time.ns_per_ms),
                         });
                     },
                 }
@@ -419,17 +436,17 @@ const Supervisor = struct {
                 if (replica.state() != .terminated) {
                     if (replica.process.?.wait_nonblocking()) |term| {
                         // Replicas shouldn't exit on their own, even with code=0.
-                        maybe(std.meta.eql(term, .{ .Exited = 0 }));
+                        maybe(std.meta.eql(term, .{ .exited = 0 }));
 
                         log.err(
                             "{}: replica terminated unexpectedly with {}",
                             .{ replica_index, term },
                         );
-                        if (std.meta.eql(term, .{ .Signal = std.posix.SIG.KILL })) {
+                        if (std.meta.eql(term, .{ .signal = std.posix.SIG.KILL })) {
                             // If one of the replica dies to SIGKILL, it is likely an OOM.
                             // Bubble that up to CFO so that this Vortex run is counted as neither a
                             // success or failure.
-                            std.posix.exit(@intCast(128 + term.Signal));
+                            std.process.exit(@intCast(128 + @intFromEnum(term.signal)));
                         } else {
                             fatal(.replica_exit_result, "replica exited with: {}", .{term});
                         }
@@ -450,7 +467,7 @@ const Supervisor = struct {
         };
 
         switch (workload_result) {
-            .Signal => |signal| {
+            .signal => |signal| {
                 switch (signal) {
                     std.posix.SIG.KILL => log.info("workload terminated as requested", .{}),
                     else => {
@@ -494,12 +511,11 @@ fn replicas_in_state(
 fn comma_separate_ports(allocator: std.mem.Allocator, ports: []const u16) ![]const u8 {
     assert(ports.len > 0);
 
-    var out = std.ArrayList(u8).init(allocator);
+    var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();
 
-    const writer = out.writer();
-    try writer.print("{d}", .{ports[0]});
-    for (ports[1..]) |port| try writer.print(",{d}", .{port});
+    try out.print("{d}", .{ports[0]});
+    for (ports[1..]) |port| try out.print(",{d}", .{port});
 
     return out.toOwnedSlice();
 }
@@ -650,7 +666,10 @@ const Workload = struct {
         args: CLIArgs,
     ) !*Workload {
         var vortex_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const vortex_path = try std.fs.selfExePath(&vortex_path_buffer);
+        const vortex_path = vortex_path_buffer[0..try std.process.executablePath(
+            std.Options.debug_io,
+            &vortex_path_buffer,
+        )];
 
         const driver_command_selected = args.driver_command orelse vortex_driver_exe_default;
         log.info("launching workload with driver: {s}", .{driver_command_selected});
@@ -681,7 +700,7 @@ const Workload = struct {
         errdefer allocator.destroy(workload);
 
         const process = try LoggedProcess.spawn(allocator, argv, .{
-            .stdout_behavior = .Pipe,
+            .stdout_behavior = .pipe,
         });
         errdefer process.destroy(allocator);
 

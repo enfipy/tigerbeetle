@@ -42,7 +42,7 @@ const Buffer = struct {
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
-            .inner = std.ArrayList(u8).init(allocator),
+            .inner = std.array_list.Managed(u8).init(allocator),
         };
     }
 

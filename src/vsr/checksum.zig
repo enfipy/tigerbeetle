@@ -40,7 +40,8 @@ const MiB = stdx.MiB;
 
 const Aegis128LMac_128 = stdx.aegis.Aegis128LMac_128;
 
-var seed_once = std.once(seed_init);
+// 0=uninitialized, 1=initializing, 2=initialized
+var seed_init_state = std.atomic.Value(u8).init(0);
 var seed_state: Aegis128LMac_128 = undefined;
 
 comptime {
@@ -56,6 +57,23 @@ comptime {
 fn seed_init() void {
     const key: [16]u8 = @splat(0);
     seed_state = Aegis128LMac_128.init(&key);
+}
+
+fn seed_ensure_initialized() void {
+    while (true) {
+        switch (seed_init_state.load(.acquire)) {
+            2 => return,
+            0 => {
+                if (seed_init_state.cmpxchgWeak(0, 1, .acq_rel, .acquire) == null) {
+                    seed_init();
+                    seed_init_state.store(2, .release);
+                    return;
+                }
+            },
+            1 => std.atomic.spinLoopHint(),
+            else => unreachable,
+        }
+    }
 }
 
 // Lazily initialize the Aegis State instead of recomputing it on each call to checksum().
@@ -81,7 +99,7 @@ pub const ChecksumStream = struct {
     state: Aegis128LMac_128,
 
     pub fn init() ChecksumStream {
-        seed_once.call();
+        seed_ensure_initialized();
         return ChecksumStream{ .state = seed_state };
     }
 

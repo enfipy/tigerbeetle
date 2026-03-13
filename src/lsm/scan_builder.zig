@@ -107,7 +107,7 @@ pub fn ScanBuilderType(
             timestamp_range: TimestampRange,
             direction: Direction,
         ) *Scan {
-            const field = comptime std.enums.nameCast(std.meta.FieldEnum(Scan.Dispatcher), index);
+            const field = comptime @field(std.meta.FieldEnum(Scan.Dispatcher), @tagName(index));
             const ScanImpl = ScanImplType(field);
             return self.scan_add(
                 field,
@@ -393,15 +393,17 @@ pub fn ScanType(
                     };
                 }
 
-                break :blk @Type(.{ .@"enum" = .{
-                    .tag_type = std.math.IntFittingRange(0, tag_fields.len - 1),
-                    .fields = &tag_fields,
-                    .decls = &.{},
-                    .is_exhaustive = true,
-                } });
+                break :blk stdx.EnumFromFieldsType(
+                    std.math.IntFittingRange(0, tag_fields.len - 1),
+                    &tag_fields,
+                    true,
+                );
             };
 
-            break :T @Type(type_info);
+            break :T stdx.UnionFromFieldsType(
+                type_info.@"union".tag_type,
+                type_info.@"union".fields,
+            );
         };
 
         dispatcher: Dispatcher,

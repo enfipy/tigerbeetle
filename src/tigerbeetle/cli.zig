@@ -498,7 +498,7 @@ const lsm_compaction_block_memory_min = lsm_compaction_block_count_min * constan
 /// While CLIArgs store raw arguments as passed on the command line, Command ensures that arguments
 /// are properly validated and desugared (e.g, sizes converted to counts where appropriate).
 pub const Command = union(enum) {
-    const Addresses = stdx.BoundedArrayType(std.net.Address, constants.members_max);
+    const Addresses = stdx.BoundedArrayType(std.Io.net.IpAddress, constants.members_max);
     const Path = stdx.BoundedArrayType(u8, std.fs.max_path_bytes);
 
     pub const Format = struct {
@@ -547,7 +547,7 @@ pub const Command = union(enum) {
         path: []const u8,
         log_debug: bool,
         log_trace: bool,
-        statsd: ?std.net.Address,
+        statsd: ?std.Io.net.IpAddress,
     };
 
     pub const Version = struct {
@@ -667,7 +667,7 @@ pub const Command = union(enum) {
     pub const AMQP = struct {
         addresses: Addresses,
         cluster: u128,
-        host: std.net.Address,
+        host: std.Io.net.IpAddress,
         user: []const u8,
         password: []const u8,
         vhost: []const u8,
@@ -695,7 +695,7 @@ pub const Command = union(enum) {
 
 /// Parse the command line arguments passed to the `tigerbeetle` binary.
 /// Exits the program with a non-zero exit code if an error is found.
-pub fn parse_args(args_iterator: *std.process.ArgIterator) Command {
+pub fn parse_args(args_iterator: *std.process.Args.Iterator) Command {
     const cli_args = stdx.flags(args_iterator, CLIArgs);
 
     return switch (cli_args) {
@@ -758,7 +758,8 @@ fn parse_args_format(format: CLIArgs.Format) Command.Format {
     assert(replica < constants.members_max);
     assert(replica < format.replica_count + constants.standbys_max);
 
-    const cluster_random = std.crypto.random.int(u128);
+    const random = (std.Random.IoSource{ .io = std.Options.debug_io }).interface();
+    const cluster_random = random.int(u128);
     assert(cluster_random != 0);
     const cluster = format.cluster orelse cluster_random;
     if (format.cluster == null) {
@@ -873,14 +874,14 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     const storage_size_limit_min = data_file_size_min;
     const storage_size_limit_max = constants.storage_size_limit_max;
     if (storage_size_limit > storage_size_limit_max) {
-        vsr.fatal(.cli, "--limit-storage: size {}{s} exceeds maximum: {}", .{
+        vsr.fatal(.cli, "--limit-storage: size {}{s} exceeds maximum: {s}", .{
             start_limit_storage.value,
             start_limit_storage.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(storage_size_limit_max),
         });
     }
     if (storage_size_limit < storage_size_limit_min) {
-        vsr.fatal(.cli, "--limit-storage: size {}{s} is below minimum: {}", .{
+        vsr.fatal(.cli, "--limit-storage: size {}{s} is below minimum: {s}", .{
             start_limit_storage.value,
             start_limit_storage.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(storage_size_limit_min),
@@ -889,7 +890,7 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     if (storage_size_limit % constants.sector_size != 0) {
         vsr.fatal(
             .cli,
-            "--limit-storage: size {}{s} must be a multiple of sector size ({})",
+            "--limit-storage: size {}{s} must be a multiple of sector size ({s})",
             .{
                 start_limit_storage.value,
                 start_limit_storage.suffix(),
@@ -920,14 +921,14 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     const request_size_limit_min = 4096;
     const request_size_limit_max = constants.message_size_max;
     if (request_size_limit.bytes() > request_size_limit_max) {
-        vsr.fatal(.cli, "--limit-request: size {}{s} exceeds maximum: {}", .{
+        vsr.fatal(.cli, "--limit-request: size {}{s} exceeds maximum: {s}", .{
             request_size_limit.value,
             request_size_limit.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(request_size_limit_max),
         });
     }
     if (request_size_limit.bytes() < request_size_limit_min) {
-        vsr.fatal(.cli, "--limit-request: size {}{s} is below minimum: {}", .{
+        vsr.fatal(.cli, "--limit-request: size {}{s} is below minimum: {s}", .{
             request_size_limit.value,
             request_size_limit.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(request_size_limit_min),
@@ -939,14 +940,14 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     const lsm_manifest_memory_min = constants.lsm_manifest_memory_size_min;
     const lsm_manifest_memory_multiplier = constants.lsm_manifest_memory_size_multiplier;
     if (lsm_manifest_memory > lsm_manifest_memory_max) {
-        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} exceeds maximum: {}", .{
+        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} exceeds maximum: {s}", .{
             start_memory_lsm_manifest.value,
             start_memory_lsm_manifest.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(lsm_manifest_memory_max),
         });
     }
     if (lsm_manifest_memory < lsm_manifest_memory_min) {
-        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} is below minimum: {}", .{
+        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} is below minimum: {s}", .{
             start_memory_lsm_manifest.value,
             start_memory_lsm_manifest.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(lsm_manifest_memory_min),
@@ -955,7 +956,7 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     if (lsm_manifest_memory % lsm_manifest_memory_multiplier != 0) {
         vsr.fatal(
             .cli,
-            "--memory-lsm-manifest: size {}{s} must be a multiple of {}",
+            "--memory-lsm-manifest: size {}{s} must be a multiple of {s}",
             .{
                 start_memory_lsm_manifest.value,
                 start_memory_lsm_manifest.suffix(),
@@ -968,14 +969,14 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
         start.memory_lsm_compaction orelse defaults.memory_lsm_compaction;
     const lsm_compaction_block_memory_max = constants.compaction_block_memory_size_max;
     if (lsm_compaction_block_memory.bytes() > lsm_compaction_block_memory_max) {
-        vsr.fatal(.cli, "--memory-lsm-compaction: size {}{s} exceeds maximum: {}", .{
+        vsr.fatal(.cli, "--memory-lsm-compaction: size {}{s} exceeds maximum: {s}", .{
             lsm_compaction_block_memory.value,
             lsm_compaction_block_memory.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(lsm_compaction_block_memory_max),
         });
     }
     if (lsm_compaction_block_memory.bytes() < lsm_compaction_block_memory_min) {
-        vsr.fatal(.cli, "--memory-lsm-compaction: size {}{s} is below minimum: {}", .{
+        vsr.fatal(.cli, "--memory-lsm-compaction: size {}{s} is below minimum: {s}", .{
             lsm_compaction_block_memory.value,
             lsm_compaction_block_memory.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(lsm_compaction_block_memory_min),
@@ -984,7 +985,7 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     if (lsm_compaction_block_memory.bytes() % constants.block_size != 0) {
         vsr.fatal(
             .cli,
-            "--memory-lsm-compaction: size {}{s} must be a multiple of {}",
+            "--memory-lsm-compaction: size {}{s} must be a multiple of {s}",
             .{
                 lsm_compaction_block_memory.value,
                 lsm_compaction_block_memory.suffix(),
@@ -1196,14 +1197,14 @@ fn parse_args_inspect_integrity(args: CLIArgs.Inspect) Command.Inspect.Integrity
     const lsm_manifest_memory_min = constants.lsm_manifest_memory_size_min;
     const lsm_manifest_memory_multiplier = constants.lsm_manifest_memory_size_multiplier;
     if (lsm_manifest_memory > lsm_manifest_memory_max) {
-        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} exceeds maximum: {}", .{
+        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} exceeds maximum: {s}", .{
             scrub_memory_lsm_manifest.value,
             scrub_memory_lsm_manifest.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(lsm_manifest_memory_max),
         });
     }
     if (lsm_manifest_memory < lsm_manifest_memory_min) {
-        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} is below minimum: {}", .{
+        vsr.fatal(.cli, "--memory-lsm-manifest: size {}{s} is below minimum: {s}", .{
             scrub_memory_lsm_manifest.value,
             scrub_memory_lsm_manifest.suffix(),
             vsr.stdx.fmt_int_size_bin_exact(lsm_manifest_memory_min),
@@ -1212,7 +1213,7 @@ fn parse_args_inspect_integrity(args: CLIArgs.Inspect) Command.Inspect.Integrity
     if (lsm_manifest_memory % lsm_manifest_memory_multiplier != 0) {
         vsr.fatal(
             .cli,
-            "--memory-lsm-manifest: size {}{s} must be a multiple of {}",
+            "--memory-lsm-manifest: size {}{s} must be a multiple of {s}",
             .{
                 scrub_memory_lsm_manifest.value,
                 scrub_memory_lsm_manifest.suffix(),
@@ -1394,7 +1395,7 @@ fn parse_address_and_port(
     raw_address: []const u8,
     comptime flag: []const u8,
     port_default: u16,
-) std.net.Address {
+) std.Io.net.IpAddress {
     comptime assert(std.mem.startsWith(u8, flag, "--"));
 
     const address = vsr.parse_address_and_port(.{

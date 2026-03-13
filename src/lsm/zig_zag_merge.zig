@@ -282,7 +282,7 @@ fn TestContextType(comptime streams_max: u32) type {
             );
 
             for (std.enums.values(Direction)) |direction| {
-                var actual = std.ArrayList(Value).init(testing.allocator);
+                var actual = std.array_list.Managed(Value).init(testing.allocator);
                 defer actual.deinit();
 
                 var context: TestContext = .{
@@ -526,7 +526,11 @@ test "zig_zag_merge: unit" {
 }
 
 test "zig_zag_merge: fuzz" {
-    const seed = std.crypto.random.int(u64);
+    const seed = seed: {
+        var seed_bytes: [8]u8 = undefined;
+        std.Options.debug_io.random(&seed_bytes);
+        break :seed std.mem.readInt(u64, &seed_bytes, .little);
+    };
     errdefer std.debug.print("\nTEST FAILED: seed = {}\n", .{seed});
 
     var prng = stdx.PRNG.from_seed(seed);

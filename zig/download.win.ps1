@@ -1,10 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $ZIG_MIRROR="https://pkg.machengine.org/zig"
-$ZIG_RELEASE = "0.14.1"
+$ZIG_RELEASE = "0.16.0-dev.2637+6a9510c0e"
 $ZIG_CHECKSUMS = @"
-$ZIG_MIRROR/0.14.1/zig-aarch64-windows-0.14.1.zip b5aac0ccc40dd91e8311b1f257717d8e3903b5fefb8f659de6d65a840ad1d0e7
-$ZIG_MIRROR/0.14.1/zig-x86_64-windows-0.14.1.zip 554f5378228923ffd558eac35e21af020c73789d87afeabf4bfd16f2e6feed2c
+$ZIG_MIRROR/0.16.0-dev.2637+6a9510c0e/zig-aarch64-windows-0.16.0-dev.2637+6a9510c0e.zip efd435ef743897882ec2d1047da0a34e44681e0cc2966db498d7d16ee80bb2b5
+$ZIG_MIRROR/0.16.0-dev.2637+6a9510c0e/zig-x86_64-windows-0.16.0-dev.2637+6a9510c0e.zip 9e5570f66f17e74e037c01102208963433bd13f034926fe40f55b05ec0e8a28d
 "@
 
 $ZIG_ARCH = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
@@ -57,3 +57,4 @@ Remove-Item "$ZIG_DIRECTORY"
 # It's up to the user to add this to their path if they want to:
 $ZIG_BIN = Join-Path (Get-Location) "zig\zig.exe"
 Write-Output "Downloading completed ($ZIG_BIN)! Enjoy!"
+

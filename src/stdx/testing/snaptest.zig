@@ -128,7 +128,7 @@ pub const Snap = struct {
     ///   - `SNAP_UPDATE` env var.
     fn should_update(snapshot: *const Snap) bool {
         return snapshot.update_this or update_all or
-            std.process.hasEnvVarConstant("SNAP_UPDATE");
+            std.c.getenv("SNAP_UPDATE") != null;
     }
 
     // Compare the snapshot with a formatted string.
@@ -144,19 +144,19 @@ pub const Snap = struct {
         snapshot: *const Snap,
         value: anytype,
     ) !void {
-        var got: std.ArrayListUnmanaged(u8) = .empty;
-        defer got.deinit(std.testing.allocator);
+        var got: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer got.deinit();
 
-        try std.zon.stringify.serialize(value, .{}, got.writer(std.testing.allocator));
-        try snapshot.diff(got.items);
+        try std.zon.stringify.serialize(value, .{}, &got.writer);
+        try snapshot.diff(got.writer.buffered());
     }
 
     pub fn diff_hex(snapshot: *const Snap, value: []const u8) !void {
-        var buffer: std.ArrayListUnmanaged(u8) = .empty;
-        defer buffer.deinit(std.testing.allocator);
+        var writer_allocating: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer writer_allocating.deinit();
 
-        try hexdump(value, buffer.writer(std.testing.allocator).any());
-        try snapshot.diff(buffer.items);
+        try hexdump(value, &writer_allocating.writer);
+        try snapshot.diff(writer_allocating.writer.buffered());
     }
 
     // Compare the snapshot with a given string.
@@ -199,8 +199,15 @@ pub const Snap = struct {
             &.{ snapshot.module_path, snapshot.location.file },
         );
 
-        const file_text = try std.fs.cwd().readFileAlloc(arena, file_path_relative, 1 * MiB);
-        var file_text_updated = try std.ArrayList(u8).initCapacity(arena, file_text.len);
+        const file_text = try std.Io.Dir.readFileAlloc(
+            std.Io.Dir.cwd(),
+            std.Options.debug_io,
+            file_path_relative,
+            arena,
+            .limited(1 * MiB),
+        );
+        var file_text_updated: std.Io.Writer.Allocating = .init(arena);
+        defer file_text_updated.deinit();
 
         const line_zero_based = snapshot.location.line - 1;
         const range = snap_range(file_text, line_zero_based);
@@ -211,18 +218,18 @@ pub const Snap = struct {
 
         const indent = get_indent(snapshot_text);
 
-        try file_text_updated.appendSlice(snapshot_prefix);
+        try file_text_updated.writer.writeAll(snapshot_prefix);
         {
             var lines = std.mem.splitScalar(u8, got, '\n');
             while (lines.next()) |line| {
-                try file_text_updated.writer().print("{s}\\\\{s}\n", .{ indent, line });
+                try file_text_updated.writer.print("{s}\\\\{s}\n", .{ indent, line });
             }
         }
-        try file_text_updated.appendSlice(snapshot_suffix);
+        try file_text_updated.writer.writeAll(snapshot_suffix);
 
-        try std.fs.cwd().writeFile(.{
+        try std.Io.Dir.writeFile(std.Io.Dir.cwd(), std.Options.debug_io, .{
             .sub_path = file_path_relative,
-            .data = file_text_updated.items,
+            .data = file_text_updated.writer.buffered(),
         });
 
         std.debug.print("Updated {s}\n", .{file_path_relative});
@@ -337,7 +344,7 @@ fn get_indent(line: []const u8) []const u8 {
     return line;
 }
 
-fn hexdump(bytes: []const u8, writer: std.io.AnyWriter) !void {
+fn hexdump(bytes: []const u8, writer: *std.Io.Writer) !void {
     for (bytes, 0..) |byte, index| {
         if (index > 0) {
             const space = if (index % 16 == 0) "\n" else if (index % 8 == 0) "  " else " ";

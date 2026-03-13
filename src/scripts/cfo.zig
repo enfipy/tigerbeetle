@@ -216,8 +216,10 @@ pub fn main(shell: *Shell, gpa: std.mem.Allocator, cli_args: CLIArgs) !void {
 
 /// Format and print an error message to stderr, then exit with an exit code of 1.
 fn fatal(comptime fmt_string: []const u8, args: anytype) noreturn {
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("error: " ++ fmt_string ++ "\n", args) catch {};
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.Io.File.stderr().writer(std.Options.debug_io, &stderr_buffer);
+    stderr_writer.interface.print("error: " ++ fmt_string ++ "\n", args) catch {};
+    stderr_writer.flush() catch {};
     std.process.exit(1);
 }
 
@@ -244,7 +246,7 @@ fn run_fuzzers(
         seed_logs.deinit(gpa);
     }
 
-    const random = std.crypto.random;
+    const random = (std.Random.IoSource{ .io = std.Options.debug_io }).interface();
 
     const FuzzerChild = struct {
         fuzzer: Fuzzer,
@@ -257,7 +259,7 @@ fn run_fuzzers(
     @memset(children, null);
     defer for (children) |*fuzzer_or_null| {
         if (fuzzer_or_null.*) |*fuzzer| {
-            _ = fuzzer.child.kill() catch {};
+            fuzzer.child.kill(std.Options.debug_io);
             fuzzer_or_null.* = null;
         }
     };
@@ -265,17 +267,21 @@ fn run_fuzzers(
     var tasks = Tasks.init(shell.arena.allocator());
     defer tasks.deinit();
 
-    var budget_timer = try std.time.Timer.start();
+    var budget_start = std.Io.Timestamp.now(std.Options.debug_io, .boot);
     const sleep_ns = 100 * std.time.ns_per_ms;
 
-    var refresh_timer = try std.time.Timer.start();
+    var refresh_start = std.Io.Timestamp.now(std.Options.debug_io, .boot);
     var refresh_first = true;
 
     while (true) {
-        const iteration_refresh = refresh_first or refresh_timer.read() >= options.refresh.ns;
-        if (iteration_refresh) refresh_timer.reset();
+        const iteration_refresh = refresh_first or
+            refresh_start.durationTo(std.Io.Timestamp.now(std.Options.debug_io, .boot)).nanoseconds >=
+                options.refresh.ns;
+        if (iteration_refresh) refresh_start = std.Io.Timestamp.now(std.Options.debug_io, .boot);
 
-        const iteration_last = budget_timer.read() >= options.budget.ns;
+        const iteration_last =
+            budget_start.durationTo(std.Io.Timestamp.now(std.Options.debug_io, .boot)).nanoseconds >=
+            options.budget.ns;
         const iteration_push = (iteration_refresh and !refresh_first) or iteration_last;
         refresh_first = false;
 
@@ -313,7 +319,9 @@ fn run_fuzzers(
                     .seed = seed,
                 });
                 // NB: take timestamp after spawning to exclude build time.
-                const seed_timestamp_start: u64 = @intCast(std.time.nanoTimestamp());
+                const seed_timestamp_start: u64 = @intCast(
+                    std.Io.Timestamp.now(std.Options.debug_io, .real).toNanoseconds(),
+                );
 
                 child_or_null.* = .{
                     .fuzzer = task.seed_template.fuzzer,
@@ -338,7 +346,7 @@ fn run_fuzzers(
         }
 
         // Wait before polling for completion, to avoid hogging the CPU.
-        std.time.sleep(sleep_ns);
+        try std.Io.sleep(std.Options.debug_io, .{ .nanoseconds = sleep_ns }, .awake);
 
         var running_count: u32 = 0;
         for (children) |*fuzzer_or_null| {
@@ -357,7 +365,7 @@ fn run_fuzzers(
                 task.runtime_virtual += @divFloor(sleep_ns, task.weight);
 
                 var fuzzer_done = false;
-                _ = fuzzer.child.stdin.?.write(&.{1}) catch |err| {
+                fuzzer.child.stdin.?.writeStreamingAll(std.Options.debug_io, &.{1}) catch |err| {
                     switch (err) {
                         error.WouldBlock => {},
                         error.BrokenPipe => fuzzer_done = true,
@@ -366,8 +374,9 @@ fn run_fuzzers(
                 };
 
                 const seed_timestamp_start_ns = fuzzer.seed.seed_timestamp_start;
-                const seed_duration_ns =
-                    @as(u64, @intCast(std.time.nanoTimestamp())) - seed_timestamp_start_ns;
+                const seed_duration_ns = @as(u64, @intCast(
+                    std.Io.Timestamp.now(std.Options.debug_io, .real).toNanoseconds(),
+                )) - seed_timestamp_start_ns;
                 const seed_expired = !fuzzer_done and seed_duration_ns > options.timeout.ns;
 
                 if (fuzzer_done or seed_expired or iteration_last) {
@@ -377,14 +386,19 @@ fn run_fuzzers(
                         if (fuzzer_done) "" else " (timeout)",
                     });
 
-                    const term = try if (fuzzer_done) fuzzer.child.wait() else fuzzer.child.kill();
+                    const term: std.process.Child.Term = if (fuzzer_done)
+                        try fuzzer.child.wait(std.Options.debug_io)
+                    else blk: {
+                        fuzzer.child.kill(std.Options.debug_io);
+                        break :blk .{ .signal = std.posix.SIG.KILL };
+                    };
                     const term_adapted: enum { sigkill, sigterm, other } = term: {
-                        const code_kill = 128 + std.posix.SIG.KILL;
-                        const code_term = 128 + std.posix.SIG.TERM;
+                        const code_kill: u8 = 128 + @intFromEnum(std.posix.SIG.KILL);
+                        const code_term: u8 = 128 + @intFromEnum(std.posix.SIG.TERM);
                         const vortex = fuzzer.fuzzer == .vortex;
 
-                        if (std.meta.eql(term, .{ .Signal = std.posix.SIG.KILL }) or
-                            (std.meta.eql(term, .{ .Exited = @intCast(code_kill) }) and vortex))
+                        if (std.meta.eql(term, .{ .signal = std.posix.SIG.KILL }) or
+                            (std.meta.eql(term, .{ .exited = code_kill }) and vortex))
                         {
                             // Something killed the fuzzer. This is likely OOM, so count this seed
                             // neither as a success, nor as a failure.
@@ -397,8 +411,8 @@ fn run_fuzzers(
                         }
 
                         if (iteration_last) {
-                            if (std.meta.eql(term, .{ .Signal = std.posix.SIG.TERM }) or
-                                (std.meta.eql(term, .{ .Exited = @intCast(code_term) }) and vortex))
+                            if (std.meta.eql(term, .{ .signal = std.posix.SIG.TERM }) or
+                                (std.meta.eql(term, .{ .exited = code_term }) and vortex))
                             {
                                 // We killed the fuzzer because our budgeted time is expired, but
                                 // the seed itself is indeterminate.
@@ -416,13 +430,16 @@ fn run_fuzzers(
                         .sigterm => log.info("ignored SIGTERM for '{s}'", .{fuzzer.seed.command}),
                         .other => {
                             var seed_record = fuzzer.seed;
-                            seed_record.ok = std.meta.eql(term, .{ .Exited = 0 });
+                            seed_record.ok = std.meta.eql(term, .{ .exited = 0 });
                             // Convert seed_timestamp_start to seconds as `devhub.js` relies on it.
                             seed_record.seed_timestamp_start = @divFloor(
                                 seed_timestamp_start_ns,
                                 std.time.ns_per_s,
                             );
-                            seed_record.seed_timestamp_end = @intCast(std.time.timestamp());
+                            seed_record.seed_timestamp_end = @intCast(@divFloor(
+                                std.Io.Timestamp.now(std.Options.debug_io, .real).toNanoseconds(),
+                                std.time.ns_per_s,
+                            ));
                             if (!seed_record.ok) {
                                 seed_record.debug = try shell.fmt("{}", .{term});
                             }
@@ -431,7 +448,11 @@ fn run_fuzzers(
                                 try seed_logs.append(gpa, null);
                             } else done: {
                                 const log_file =
-                                    shell.cwd.openFile(fuzzer.log_path.?, .{}) catch |err| {
+                                    shell.cwd.openFile(
+                                        std.Options.debug_io,
+                                        fuzzer.log_path.?,
+                                        .{},
+                                    ) catch |err| {
                                         switch (err) {
                                             error.FileNotFound => {
                                                 try seed_logs.append(gpa, null);
@@ -440,16 +461,18 @@ fn run_fuzzers(
                                             else => return err,
                                         }
                                     };
-                                defer log_file.close();
+                                defer log_file.close(std.Options.debug_io);
 
                                 // Copy the tail of the (failing seed's) logs into a buffer.
                                 const log_data = try gpa.alloc(u8, log_size_max);
                                 errdefer gpa.free(log_data);
 
-                                const log_size_total = (try log_file.metadata()).size();
-                                try log_file.seekTo(log_size_total -| log_size_max);
-
-                                const log_tail_size = try log_file.readAll(log_data);
+                                const log_size_total = (try log_file.stat(std.Options.debug_io)).size;
+                                const log_tail_size = try log_file.readPositionalAll(
+                                    std.Options.debug_io,
+                                    log_data,
+                                    log_size_total -| log_size_max,
+                                );
                                 assert(log_tail_size == @min(log_size_max, log_size_total));
 
                                 try seed_logs.append(gpa, log_data[0..log_tail_size]);
@@ -459,14 +482,14 @@ fn run_fuzzers(
                         },
                     }
 
-                    if (std.meta.eql(term, .{ .Signal = std.posix.SIG.ABRT })) {
+                    if (std.meta.eql(term, .{ .signal = std.posix.SIG.ABRT })) {
                         // Sanity-check that we definitely record all assertion failures.
                         assert(!seeds.getLast().ok);
                     }
                     task.runtime_total_ns += seed_duration_ns;
 
                     if (fuzzer.log_path) |log_path| {
-                        shell.cwd.deleteFile(log_path) catch |err| {
+                        shell.cwd.deleteFile(std.Options.debug_io, log_path) catch |err| {
                             log.warn("error deleting log file: {} {s}", .{ err, log_path });
                         };
                     }
@@ -482,11 +505,7 @@ fn run_fuzzers(
             if (options.devhub_token == null) {
                 log.info("skipping upload, no token", .{});
                 for (seeds.items) |seed_record| {
-                    const seed_record_json = try std.json.stringifyAlloc(
-                        shell.arena.allocator(),
-                        seed_record,
-                        .{},
-                    );
+                    const seed_record_json = try shell.fmt("{f}", .{std.json.fmt(seed_record, .{})});
                     log.info("{s}", .{seed_record_json});
                 }
             }
@@ -547,20 +566,22 @@ const Tasks = struct {
 
     generation: u64 = 1,
     runtime_virtual_init: u64 = 1,
+    allocator: std.mem.Allocator,
 
     list: List,
     map: Map,
 
     pub fn init(allocator: std.mem.Allocator) Tasks {
         return .{
-            .list = Tasks.List.init(allocator),
+            .allocator = allocator,
+            .list = .empty,
             .map = Tasks.Map.init(allocator),
         };
     }
 
     pub fn deinit(tasks: *Tasks) void {
         tasks.map.deinit();
-        tasks.list.deinit();
+        tasks.list.deinit(tasks.allocator);
         tasks.* = undefined;
     }
 
@@ -658,7 +679,7 @@ const Tasks = struct {
             }
             task_existing.generation = tasks.generation;
         } else {
-            try tasks.list.append(.{
+            try tasks.list.append(tasks.allocator, .{
                 .working_directory = working_directory,
                 .seed_template = seed_template,
                 .generation = tasks.generation,
@@ -696,7 +717,7 @@ fn run_fuzzers_prepare_tasks(tasks: *Tasks, shell: *Shell, gh_token: ?[]const u8
         const commit = if (local_branch)
             try run_fuzzers_commit_info(shell)
         else commit: {
-            try shell.cwd.makePath(working_directory);
+            try std.Io.Dir.createDirPath(shell.cwd, std.Options.debug_io, working_directory);
             try shell.pushd(working_directory);
             defer shell.popd();
 
@@ -709,9 +730,10 @@ fn run_fuzzers_prepare_tasks(tasks: *Tasks, shell: *Shell, gh_token: ?[]const u8
 
         // Only add fuzzers that also exist on the branch we are fuzzing.
         const branch_cfo = try shell.cwd.readFileAlloc(
-            shell.arena.allocator(),
+            std.Options.debug_io,
             try shell.fmt("{s}/src/scripts/cfo.zig", .{working_directory}),
-            1 * MiB,
+            shell.arena.allocator(),
+            .limited(1 * MiB),
         );
 
         for (std.enums.values(Fuzzer)) |fuzzer| {
@@ -771,7 +793,7 @@ fn run_fuzzers_prepare_tasks(tasks: *Tasks, shell: *Shell, gh_token: ?[]const u8
             } else continue;
 
             const pr_directory = try shell.fmt("./working/{d}", .{pr.number});
-            try shell.cwd.makePath(pr_directory);
+            try std.Io.Dir.createDirPath(shell.cwd, std.Options.debug_io, pr_directory);
             try shell.pushd(pr_directory);
             defer shell.popd();
 
@@ -827,7 +849,10 @@ fn run_fuzzers_prepare_tasks(tasks: *Tasks, shell: *Shell, gh_token: ?[]const u8
         // weight for the next few days (i.e. until Monday).
         const release_soon = for (tasks.list.items) |*task| {
             if (task.seed_template.branch == .release) {
-                break std.time.timestamp() <
+                break @divFloor(
+                    std.Io.Timestamp.now(std.Options.debug_io, .real).toNanoseconds(),
+                    std.time.ns_per_s,
+                ) <
                     task.seed_template.commit_timestamp + 2 * std.time.s_per_day;
             }
         } else false;
@@ -952,7 +977,7 @@ fn run_fuzzers_start_fuzzer(shell: *Shell, options: struct {
     });
     if (log_path) |path| args.push(try shell.fmt("--log={s}", .{path}));
     const process = try shell.spawn(
-        .{ .stdin_behavior = .Pipe },
+        .{ .stdin_behavior = .pipe },
         "{exe} {args} {seed}",
         .{
             .exe = exe,
@@ -964,11 +989,23 @@ fn run_fuzzers_start_fuzzer(shell: *Shell, options: struct {
     // Zig doesn't have non-blocking version of child.wait, so we use `BrokenPipe`
     // on writing to child's stdin to detect if a child is dead in a non-blocking
     // manner.
-    _ = try std.posix.fcntl(
-        process.stdin.?.handle,
-        std.posix.F.SETFL,
-        @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })),
-    );
+    const fd = process.stdin.?.handle;
+    const file_flags = std.c.fcntl(fd, std.c.F.GETFL, @as(c_int, 0));
+    switch (std.posix.errno(file_flags)) {
+        .SUCCESS => {},
+        else => |err| return stdx.unexpected_errno("fcntl(F_GETFL)", err),
+    }
+
+    var oflags: std.c.O = @bitCast(@as(u32, @intCast(file_flags)));
+    oflags.NONBLOCK = true;
+    switch (std.posix.errno(std.c.fcntl(
+        fd,
+        std.c.F.SETFL,
+        @as(c_int, @bitCast(oflags)),
+    ))) {
+        .SUCCESS => {},
+        else => |err| return stdx.unexpected_errno("fcntl(F_SETFL)", err),
+    }
 
     return .{
         .command = command,
@@ -993,7 +1030,7 @@ fn upload_results(
         log.info("uploading {} seeds", .{seeds_new.len});
     }
 
-    _ = try shell.cwd.deleteTree("./devhubdb");
+    shell.cwd.deleteTree(std.Options.debug_io, "./devhubdb") catch {};
     try shell.exec(
         \\git clone --single-branch --depth 1
         \\  https://oauth2:{token}@github.com/tigerbeetle/devhubdb.git
@@ -1016,9 +1053,10 @@ fn upload_results(
 
         const max_size = 1 * MiB;
         const data = try shell.cwd.readFileAlloc(
-            arena.allocator(),
+            std.Options.debug_io,
             "./fuzzing/data.json",
-            max_size,
+            arena.allocator(),
+            .limited(max_size),
         );
 
         const seeds_old = try SeedRecord.from_json(arena.allocator(), data);
@@ -1038,13 +1076,16 @@ fn upload_results(
             if (seed.log) |path| try seeds_merged_logs.putNoClobber(path, {});
         }
 
-        try shell.cwd.makePath("./fuzzing/logs/");
+        try std.Io.Dir.createDirPath(shell.cwd, std.Options.debug_io, "./fuzzing/logs/");
         // Create new log files.
         for (seeds_new, seeds_new_logs) |*seed, seed_log_data| {
             assert((seed.log == null) == (seed_log_data == null));
             if (seed.log) |log_path| {
                 if (seeds_merged_logs.contains(log_path)) {
-                    try shell.cwd.writeFile(.{ .sub_path = log_path, .data = seed_log_data.? });
+                    try shell.cwd.writeFile(std.Options.debug_io, .{
+                        .sub_path = log_path,
+                        .data = seed_log_data.?,
+                    });
                     try shell.exec("git add {path}", .{ .path = log_path });
                 }
             }
@@ -1060,7 +1101,10 @@ fn upload_results(
             }
         }
 
-        try shell.cwd.writeFile(.{ .sub_path = "./fuzzing/data.json", .data = seeds_json });
+        try shell.cwd.writeFile(std.Options.debug_io, .{
+            .sub_path = "./fuzzing/data.json",
+            .data = seeds_json,
+        });
         try shell.exec("git add ./fuzzing/data.json", .{});
         try shell.git_env_setup(.{ .use_hostname = true });
         try shell.exec("git commit -m 🌱", .{});
@@ -1202,7 +1246,7 @@ const SeedRecord = struct {
     }
 
     fn to_json(arena: std.mem.Allocator, records: []const SeedRecord) ![]const u8 {
-        return try std.json.stringifyAlloc(arena, records, .{
+        return try std.json.Stringify.valueAlloc(arena, records, .{
             .emit_null_optional_fields = false, // Omit `"debug: ""`.
             .whitespace = .indent_2,
         });
@@ -1228,7 +1272,7 @@ const SeedRecord = struct {
         }
         std.mem.sort(SeedRecord, current_and_new, release_latest, SeedRecord.less_than);
 
-        var result = try std.ArrayList(SeedRecord).initCapacity(arena, current.len);
+        var result = try std.array_list.Managed(SeedRecord).initCapacity(arena, current.len);
 
         var commit_sha_previous: ?[40]u8 = null;
         var commit_count: u32 = 0;
@@ -1290,7 +1334,11 @@ const SeedRecord = struct {
 };
 
 fn create_log_path(arena: std.mem.Allocator) ![]const u8 {
-    const name = std.crypto.random.int(u128);
+    const name = name: {
+        var bytes: [16]u8 = undefined;
+        std.Options.debug_io.random(&bytes);
+        break :name std.mem.readInt(u128, &bytes, .little);
+    };
     return std.fmt.allocPrint(arena, "./fuzzing/logs/{x:0>32}.vopr", .{name});
 }
 

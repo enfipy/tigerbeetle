@@ -30,24 +30,27 @@ pub fn main(shell: *Shell, gpa: std.mem.Allocator) !void {
     , .{});
 
     const changelog_current = try shell.project_root.readFileAlloc(
-        shell.arena.allocator(),
+        std.Options.debug_io,
         "./CHANGELOG.md",
-        changelog_bytes_max,
+        shell.arena.allocator(),
+        .limited(changelog_bytes_max),
     );
 
-    var changelog_new = std.ArrayList(u8).init(shell.arena.allocator());
-    try format_changelog(changelog_new.writer(), .{
+    var changelog_new: std.ArrayList(u8) = .empty;
+    var changelog_writer: std.Io.Writer.Allocating = .fromArrayList(shell.arena.allocator(), &changelog_new);
+    defer changelog_new = changelog_writer.toArrayList();
+    try format_changelog(&changelog_writer.writer, .{
         .changelog_current = changelog_current,
         .merges = merges,
         .today = today,
     });
 
-    try shell.project_root.writeFile(.{ .sub_path = "CHANGELOG.md", .data = changelog_new.items });
+    try shell.project_root.writeFile(std.Options.debug_io, .{ .sub_path = "CHANGELOG.md", .data = changelog_new.items });
 
     log.info("don't forget to update ./CHANGELOG.md", .{});
 }
 
-fn format_changelog(buffer: std.ArrayList(u8).Writer, options: struct {
+fn format_changelog(buffer: *std.Io.Writer, options: struct {
     changelog_current: []const u8,
     merges: []const u8,
     today: []const u8,
@@ -292,10 +295,12 @@ test ChangelogIterator {
 test "current changelog" {
     const allocator = std.testing.allocator;
 
-    const changelog_text = try std.fs.cwd().readFileAlloc(
-        allocator,
+    const changelog_text = try std.Io.Dir.readFileAlloc(
+        std.Io.Dir.cwd(),
+        std.Options.debug_io,
         "./CHANGELOG.md",
-        changelog_bytes_max,
+        allocator,
+        .limited(changelog_bytes_max),
     );
     defer allocator.free(changelog_text);
 

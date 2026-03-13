@@ -338,7 +338,7 @@ pub fn AOFType(comptime IO: type) type {
                 allocator: std.mem.Allocator,
                 time: vsr.time.Time,
                 cluster: u128,
-                addresses: []std.net.Address,
+                addresses: []std.Io.net.IpAddress,
             ) !ReplayClient {
                 assert(addresses.len > 0);
                 assert(addresses.len <= constants.replicas_max);
@@ -494,10 +494,15 @@ pub fn AOFType(comptime IO: type) type {
             last_checksum: ?u128 = null,
 
             pub fn init(io: *IO, path: []const u8) !Iterator {
-                const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
-                errdefer file.close();
+                const file = try std.Io.Dir.openFile(
+                    std.Io.Dir.cwd(),
+                    std.Options.debug_io,
+                    path,
+                    .{ .mode = .read_only },
+                );
+                errdefer file.close(std.Options.debug_io);
 
-                const size = (try file.stat()).size;
+                const size = (try file.stat(std.Options.debug_io)).size;
 
                 return Iterator{ .io = io, .file_descriptor = file.handle, .size = size };
             }
@@ -617,7 +622,10 @@ pub fn AOFType(comptime IO: type) type {
             defer allocator.destroy(target);
 
             const dir_fd = try IO.open_dir(std.fs.path.dirname(output_path) orelse ".");
-            defer std.posix.close(dir_fd);
+            defer (std.Io.File{
+                .handle = dir_fd,
+                .flags = .{ .nonblocking = false },
+            }).close(std.Options.debug_io);
 
             for (input_paths) |input_path| {
                 aofs[aof_count] = try Iterator.init(io, input_path);
@@ -786,8 +794,8 @@ test "aof write / read" {
     const AOFIterator = AOF.Iterator;
 
     const aof_file = "test.aof";
-    std.fs.cwd().deleteFile(aof_file) catch {};
-    defer std.fs.cwd().deleteFile(aof_file) catch {};
+    std.Io.Dir.deleteFile(std.Io.Dir.cwd(), std.Options.debug_io, aof_file) catch {};
+    defer std.Io.Dir.deleteFile(std.Io.Dir.cwd(), std.Options.debug_io, aof_file) catch {};
 
     const allocator = std.testing.allocator;
 
@@ -795,7 +803,10 @@ test "aof write / read" {
     defer io.deinit();
 
     const dir_fd = try IO.open_dir(".");
-    defer std.posix.close(dir_fd);
+    defer (std.Io.File{
+        .handle = dir_fd,
+        .flags = .{ .nonblocking = false },
+    }).close(std.Options.debug_io);
 
     var aof = try AOF.init(&io, aof_file);
 
@@ -948,7 +959,7 @@ pub fn main() !void {
             var it = try AOFIterator.init(&io, command.path);
             defer it.close();
 
-            var addresses_buffer: [constants.replicas_max]std.net.Address = undefined;
+            var addresses_buffer: [constants.replicas_max]std.Io.net.IpAddress = undefined;
             const addresses_parsed = try vsr.parse_addresses(command.addresses, &addresses_buffer);
             var replay =
                 try AOFReplayClient.init(&io, allocator, time, command.cluster, addresses_parsed);
@@ -984,7 +995,7 @@ pub fn main() !void {
                 .{@as(u128, @bitCast(data_checksum[0..@sizeOf(u128)].*))},
             );
         },
-        .merge => |_| {
+        .merge => {
             var paths: [constants.members_max][:0]const u8 = undefined;
             var paths_count: u32 = 0;
             for (&paths) |*path| {

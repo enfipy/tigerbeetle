@@ -11,6 +11,8 @@ const c = @cImport({
 });
 
 const assert = std.debug.assert;
+const Mutex = std.Io.Mutex;
+const Condition = std.Io.Condition;
 
 const log = std.log.scoped(.zig_driver);
 const events_count_max = 8189;
@@ -28,7 +30,7 @@ pub const CLIArgs = struct {
     addresses: []const u8,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     defer switch (gpa_allocator.deinit()) {
         .ok => {},
@@ -36,7 +38,7 @@ pub fn main() !void {
     };
 
     const allocator = gpa_allocator.allocator();
-    var args_iterator = try std.process.argsWithAllocator(allocator);
+    var args_iterator = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
     defer args_iterator.deinit();
 
     const args = stdx.flags(&args_iterator, CLIArgs);
@@ -59,12 +61,17 @@ pub fn main() !void {
         assert(client_status == c.TB_CLIENT_OK);
     }
 
-    const stdin = std.io.getStdIn().reader().any();
-    const stdout = std.io.getStdOut().writer().any();
+    var stdin_buffer: [4096]u8 = undefined;
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdin_reader = std.Io.File.stdin().reader(std.Options.debug_io, &stdin_buffer);
+    var stdout_writer = std.Io.File.stdout().writer(std.Options.debug_io, &stdout_buffer);
 
     while (true) {
         var events_buffer: [events_buffer_size_max]u8 = undefined;
-        const operation, const events = receive(stdin, events_buffer[0..]) catch |err| {
+        const operation, const events = receive(
+            &stdin_reader.interface,
+            events_buffer[0..],
+        ) catch |err| {
             switch (err) {
                 error.EndOfStream => break,
                 else => return err,
@@ -74,12 +81,12 @@ pub fn main() !void {
         var context = RequestContext{};
 
         {
-            context.lock.lock();
-            defer context.lock.unlock();
+            context.lock.lockUncancelable(std.Options.debug_io);
+            defer context.lock.unlock(std.Options.debug_io);
 
             var packet: c.tb_packet_t = undefined;
             packet.operation = @intFromEnum(operation);
-            packet.user_data = @constCast(@ptrCast(&context));
+            packet.user_data = @ptrCast(@constCast(&context));
             packet.data = @constCast(events.ptr);
             packet.data_size = @intCast(events.len);
             packet.user_tag = 0;
@@ -89,25 +96,22 @@ pub fn main() !void {
             assert(client_status == c.TB_CLIENT_OK);
 
             while (!context.completed) {
-                context.condition.wait(&context.lock);
+                context.condition.waitUncancelable(std.Options.debug_io, &context.lock);
             }
         }
 
-        write_results(stdout, operation, context.result[0..context.result_size]) catch |err| {
-            switch (err) {
-                error.BrokenPipe => {
-                    log.info("stdout is closed, exiting", .{});
-                    break;
-                },
-                else => return err,
-            }
-        };
+        try write_results(
+            &stdout_writer.interface,
+            operation,
+            context.result[0..context.result_size],
+        );
+        try stdout_writer.interface.flush();
     }
 }
 
 const RequestContext = struct {
-    lock: std.Thread.Mutex = .{},
-    condition: std.Thread.Condition = .{},
+    lock: Mutex = .init,
+    condition: Condition = .init,
     completed: bool = false,
     result: [constants.message_body_size_max]u8 = undefined,
     result_size: u32 = 0,
@@ -124,8 +128,8 @@ pub fn on_complete(
     _ = timestamp;
     const context: *RequestContext = @ptrCast(@alignCast(tb_packet.*.user_data.?));
 
-    context.lock.lock();
-    defer context.lock.unlock();
+    context.lock.lockUncancelable(std.Options.debug_io);
+    defer context.lock.unlock(std.Options.debug_io);
 
     assert(tb_packet.*.status == c.TB_PACKET_OK);
     assert(result != null);
@@ -133,11 +137,11 @@ pub fn on_complete(
     stdx.copy_disjoint(.exact, u8, context.result[0..result_size], result.?[0..result_size]);
     context.result_size = result_size;
     context.completed = true;
-    context.condition.signal();
+    context.condition.signal(std.Options.debug_io);
 }
 
 fn write_results(
-    writer: std.io.AnyWriter,
+    writer: *std.Io.Writer,
     operation: Operation,
     result: []const u8,
 ) !void {
@@ -159,9 +163,9 @@ fn write_results(
     }
 }
 
-fn receive(reader: std.io.AnyReader, buffer: []u8) !struct { Operation, []const u8 } {
-    const operation = try reader.readEnum(Operation, .little);
-    const count = try reader.readInt(u32, .little);
+fn receive(reader: *std.Io.Reader, buffer: []u8) !struct { Operation, []const u8 } {
+    const operation = try reader.takeEnum(Operation, .little);
+    const count = try reader.takeInt(u32, .little);
 
     return switch (operation) {
         inline else => |operation_comptime| {
@@ -170,8 +174,7 @@ fn receive(reader: std.io.AnyReader, buffer: []u8) !struct { Operation, []const 
             const response_size = operation_comptime.event_size() * count;
             assert(buffer.len >= response_size);
 
-            const read_total_size = try reader.readAtLeast(buffer, response_size);
-            assert(read_total_size == response_size);
+            try reader.readSliceAll(buffer[0..response_size]);
 
             return .{ operation_comptime, buffer[0..response_size] };
         },

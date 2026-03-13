@@ -849,7 +849,11 @@ pub fn StateMachineType(comptime Storage: type) type {
                     }
                     break :max .{ buffer_size_max, batch_count_max };
                 };
-            self.scan_lookup_buffer = try allocator.alignedAlloc(u8, 16, scan_lookup_buffer_size);
+            self.scan_lookup_buffer = try allocator.alignedAlloc(
+                u8,
+                std.mem.Alignment.fromByteUnits(16),
+                scan_lookup_buffer_size,
+            );
             errdefer allocator.free(self.scan_lookup_buffer);
 
             self.scan_lookup_results = try std.ArrayListUnmanaged(u32).initCapacity(
@@ -2008,7 +2012,7 @@ pub fn StateMachineType(comptime Storage: type) type {
             inline for (indexes) |index| {
                 if (@field(filter, @tagName(index)) != 0) {
                     scan_conditions.push(groove.scan_builder.scan_prefix(
-                        std.enums.nameCast(std.meta.FieldEnum(Groove.IndexTrees), index),
+                        @field(std.meta.FieldEnum(Groove.IndexTrees), @tagName(index)),
                         self.forest.scan_buffer_pool.acquire_assume_capacity(),
                         self.prefetch_snapshot.?,
                         @field(filter, @tagName(index)),

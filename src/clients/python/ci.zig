@@ -27,9 +27,10 @@ pub fn tests(shell: *Shell, gpa: std.mem.Allocator) !void {
         "src",
     });
 
-    const python_path = try shell.project_root.realpathAlloc(
-        shell.arena.allocator(),
+    const python_path = try shell.project_root.realPathFileAlloc(
+        std.Options.debug_io,
         python_path_relative,
+        shell.arena.allocator(),
     );
 
     try shell.env.put("PYTHONPATH", python_path);
@@ -43,9 +44,10 @@ pub fn tests(shell: *Shell, gpa: std.mem.Allocator) !void {
         errdefer tmp_beetle.log_stderr();
 
         const tigerbeetle_exe = comptime "tigerbeetle" ++ builtin.target.exeFileExt();
-        const tigerbeetle_path = try shell.project_root.realpathAlloc(
-            shell.arena.allocator(),
+        const tigerbeetle_path = try shell.project_root.realPathFileAlloc(
+            std.Options.debug_io,
             tigerbeetle_exe,
+            shell.arena.allocator(),
         );
         try shell.env.put("TIGERBEETLE_BINARY", tigerbeetle_path);
 
@@ -78,7 +80,7 @@ pub fn validate_release(shell: *Shell, gpa: std.mem.Allocator, options: struct {
     tigerbeetle: []const u8,
 }) !void {
     const tmp_dir = try shell.create_tmp_dir();
-    defer shell.cwd.deleteTree(tmp_dir) catch {};
+    defer shell.cwd.deleteTree(std.Options.debug_io, tmp_dir) catch {};
 
     try shell.exec("python3 -m venv {tmp_dir}", .{ .tmp_dir = tmp_dir });
 
@@ -92,7 +94,11 @@ pub fn validate_release(shell: *Shell, gpa: std.mem.Allocator, options: struct {
             log.warn("waiting for 5 minutes for the {s} version to appear in PyPi", .{
                 options.version,
             });
-            std.time.sleep(5 * std.time.ns_per_min);
+            try std.Io.sleep(
+                std.Options.debug_io,
+                .{ .nanoseconds = 5 * std.time.ns_per_min },
+                .awake,
+            );
         }
     } else {
         shell.exec("{tmp_dir}/bin/pip install tigerbeetle=={version}", .{

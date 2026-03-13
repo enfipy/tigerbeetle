@@ -137,7 +137,7 @@ pub const MessageBuffer = struct {
         comptime assert(@sizeOf(vsr.Command) == @sizeOf(u8) and
             @FieldType(Header, "command") == vsr.Command);
         const command_raw: u8 = header_bytes[@offsetOf(Header, "command")];
-        _ = std.meta.intToEnum(vsr.Command, command_raw) catch {
+        if (std.enums.fromInt(vsr.Command, command_raw) == null) {
             vsr.fatal(
                 .unknown_vsr_command,
                 "unknown VSR command, crashing for safety " ++
@@ -149,7 +149,7 @@ pub const MessageBuffer = struct {
                     header.release,
                 },
             );
-        };
+        }
 
         if (header.size < @sizeOf(Header) or header.size > constants.message_size_max) {
             buffer.invalidate(.header_size);

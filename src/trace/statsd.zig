@@ -60,28 +60,27 @@ const statsd_line_size_max = line_size_max: {
     }
 
     var buffer: [packet_size_max]u8 = undefined;
-    var buffer_stream = std.io.fixedBufferStream(&buffer);
-    const buffer_writer = buffer_stream.writer();
+    var buffer_writer: std.Io.Writer = .fixed(&buffer);
 
     var line_size_max: u32 = 0;
     for (events_metric) |event| {
-        buffer_stream.reset();
+        buffer_writer.end = 0;
         format_metric(
-            buffer_writer,
+            &buffer_writer,
             .{ .metric = .{ .aggregate = event } },
             .{ .cluster = std.math.maxInt(u128), .replica = constants.members_max - 1 },
         ) catch unreachable;
-        line_size_max = @max(line_size_max, buffer_stream.getPos() catch unreachable);
+        line_size_max = @max(line_size_max, @as(u32, @intCast(buffer_writer.end)));
     }
     for (events_timing) |event| {
         for (std.enums.values(TimingStat)) |stat| {
-            buffer_stream.reset();
+            buffer_writer.end = 0;
             format_metric(
-                buffer_writer,
+                &buffer_writer,
                 .{ .timing = .{ .aggregate = event, .stat = stat } },
                 .{ .cluster = std.math.maxInt(u128), .replica = constants.members_max - 1 },
             ) catch unreachable;
-            line_size_max = @max(line_size_max, buffer_stream.getPos() catch unreachable);
+            line_size_max = @max(line_size_max, @as(u32, @intCast(buffer_writer.end)));
         }
     }
     break :line_size_max line_size_max;
@@ -132,16 +131,23 @@ pub const StatsD = struct {
         allocator: std.mem.Allocator,
         process_id: ProcessID,
         io: *IO,
-        address: std.net.Address,
+        address: std.Io.net.IpAddress,
     ) !StatsD {
-        const socket = try io.open_socket_udp(address.any.family);
+        const socket = try io.open_socket_udp(@intCast(
+            std.Io.Threaded.posixAddressFamily(&address),
+        ));
         errdefer io.close_socket(socket);
 
         const send_buffer = try allocator.create([packet_count_max * packet_size_max]u8);
         errdefer allocator.destroy(send_buffer);
 
         // 'Connect' the UDP socket, so we can just send() to it normally.
-        try std.posix.connect(socket, &address.any, address.getOsSockLen());
+        var posix_address: std.Io.Threaded.PosixAddress = undefined;
+        const posix_address_len = std.Io.Threaded.addressToPosix(&address, &posix_address);
+        switch (std.posix.errno(std.os.linux.connect(socket, &posix_address.any, posix_address_len))) {
+            .SUCCESS => {},
+            else => |err| return stdx.unexpected_errno("connect", err),
+        }
 
         log.info("{}: sending statsd metrics to {}", .{ process_id, address });
 
@@ -239,8 +245,7 @@ pub const StatsD = struct {
 
         var send_ready: u32 = 0;
         var send_sizes = stdx.BoundedArrayType(u32, packet_count_max){};
-        var send_stream = std.io.fixedBufferStream(self.send_buffer);
-        const send_writer = send_stream.writer();
+        var send_stream: std.Io.Writer = .fixed(self.send_buffer);
         inline for (.{ events_metric, events_timing }) |events| {
             for (events) |event_new_maybe| {
                 const event_new = event_new_maybe orelse continue;
@@ -257,19 +262,19 @@ pub const StatsD = struct {
                 };
 
                 for (stats) |stat| {
-                    const send_position_before = send_stream.getPos() catch unreachable;
-                    format_metric(send_writer, stat, .{
+                    const send_position_before = send_stream.end;
+                    format_metric(&send_stream, stat, .{
                         .cluster = cluster,
                         .replica = replica,
                     }) catch |err| switch (err) {
                         // This shouldn't ever happen, but don't allow metrics to kill the system.
-                        error.NoSpaceLeft => {
+                        error.NoSpaceLeft, error.WriteFailed => {
                             log.err("{}: insufficient buffer space", .{self.process_id});
                             break;
                         },
                     };
 
-                    const send_position_after = send_stream.getPos() catch unreachable;
+                    const send_position_after = send_stream.end;
                     const send_size: u32 = @intCast(send_position_after - send_position_before);
                     assert(send_size > 0);
                     if (send_ready + send_size > packet_size_max) {
@@ -356,7 +361,7 @@ fn format_metric(
     writer: anytype,
     stat: Stat,
     options: struct { cluster: u128, replica: u8 },
-) error{NoSpaceLeft}!void {
+) error{ NoSpaceLeft, WriteFailed }!void {
     const stat_name = switch (stat) {
         inline else => |stat_data| @tagName(stat_data.aggregate.event),
     };
@@ -441,7 +446,7 @@ fn struct_size_max(StructOrVoid: type) StructOrVoid {
         switch (type_info) {
             .int => @field(output, field.name) = std.math.maxInt(field.type),
             .@"enum" => @field(output, field.name) =
-                std.enums.nameCast(field.type, enum_size_max(field.type)),
+                enum_from_name(field.type, enum_size_max(field.type)),
             else => @compileError("unsupported type"),
         }
     }
@@ -459,4 +464,13 @@ fn enum_size_max(Enum: type) []const u8 {
         }
     }
     return tag_longest;
+}
+
+fn enum_from_name(comptime Enum: type, comptime name: []const u8) Enum {
+    inline for (std.meta.fields(Enum)) |field| {
+        if (comptime std.mem.eql(u8, field.name, name)) {
+            return @field(Enum, field.name);
+        }
+    }
+    unreachable;
 }

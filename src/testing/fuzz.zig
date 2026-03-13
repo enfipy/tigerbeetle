@@ -124,12 +124,7 @@ pub fn DeclEnumExcludingType(T: type, exclude: []const std.meta.DeclEnum(T)) typ
     }
     assert(i == fields_filtered.len);
 
-    return @Type(.{ .@"enum" = .{
-        .tag_type = base.tag_type,
-        .fields = &fields_filtered,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    return stdx.EnumFromFieldsType(base.tag_type, &fields_filtered, true);
 }
 
 pub fn limit_ram() void {

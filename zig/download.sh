@@ -2,14 +2,14 @@
 set -eu
 
 ZIG_MIRROR="https://pkg.machengine.org/zig"
-ZIG_RELEASE="0.14.1"
+ZIG_RELEASE="0.16.0-dev.2637+6a9510c0e"
 ZIG_CHECKSUMS=$(cat<<EOF
-${ZIG_MIRROR}/0.14.1/zig-aarch64-linux-0.14.1.tar.xz f7a654acc967864f7a050ddacfaa778c7504a0eca8d2b678839c21eea47c992b
-${ZIG_MIRROR}/0.14.1/zig-aarch64-macos-0.14.1.tar.xz 39f3dc5e79c22088ce878edc821dedb4ca5a1cd9f5ef915e9b3cc3053e8faefa
-${ZIG_MIRROR}/0.14.1/zig-aarch64-windows-0.14.1.zip b5aac0ccc40dd91e8311b1f257717d8e3903b5fefb8f659de6d65a840ad1d0e7
-${ZIG_MIRROR}/0.14.1/zig-x86_64-linux-0.14.1.tar.xz 24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c
-${ZIG_MIRROR}/0.14.1/zig-x86_64-macos-0.14.1.tar.xz b0f8bdfb9035783db58dd6c19d7dea89892acc3814421853e5752fe4573e5f43
-${ZIG_MIRROR}/0.14.1/zig-x86_64-windows-0.14.1.zip 554f5378228923ffd558eac35e21af020c73789d87afeabf4bfd16f2e6feed2c
+${ZIG_MIRROR}/0.16.0-dev.2637+6a9510c0e/zig-aarch64-linux-0.16.0-dev.2637+6a9510c0e.tar.xz 7fd2f642d03f2a470e761d93effdf74a392c50532c2b5f0d399de12b7e49c5bb
+${ZIG_MIRROR}/0.16.0-dev.2637+6a9510c0e/zig-aarch64-macos-0.16.0-dev.2637+6a9510c0e.tar.xz 164945b0d1edd9cd3b7612de90d06e85ccd33389c1c957b7ad1c69acf0afa61f
+${ZIG_MIRROR}/0.16.0-dev.2637+6a9510c0e/zig-aarch64-windows-0.16.0-dev.2637+6a9510c0e.zip efd435ef743897882ec2d1047da0a34e44681e0cc2966db498d7d16ee80bb2b5
+${ZIG_MIRROR}/0.16.0-dev.2637+6a9510c0e/zig-x86_64-linux-0.16.0-dev.2637+6a9510c0e.tar.xz ec2a84e37aa73c7b62b02a0d8155a0e41f016db2c81b15202885ce2552d02254
+${ZIG_MIRROR}/0.16.0-dev.2637+6a9510c0e/zig-x86_64-macos-0.16.0-dev.2637+6a9510c0e.tar.xz aff52cb33680df9da2db04442cc7579811a9909336eff13c6d7bb72ca968ecc9
+${ZIG_MIRROR}/0.16.0-dev.2637+6a9510c0e/zig-x86_64-windows-0.16.0-dev.2637+6a9510c0e.zip 9e5570f66f17e74e037c01102208963433bd13f034926fe40f55b05ec0e8a28d
 EOF
 )
 
@@ -116,3 +116,4 @@ rmdir "$ZIG_DIRECTORY"
 # It's up to the user to add this to their path if they want to:
 ZIG_BIN="$(pwd)/zig/zig"
 echo "Downloading completed ($ZIG_BIN)! Enjoy!"
+

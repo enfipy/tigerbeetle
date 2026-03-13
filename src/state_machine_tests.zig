@@ -624,12 +624,16 @@ fn check_version(
     var transfers = std.AutoHashMap(u128, Transfer).init(allocator);
     defer transfers.deinit();
 
-    var request = std.ArrayListAligned(u8, 16).init(allocator);
+    var request = std.array_list
+        .AlignedManaged(u8, std.mem.Alignment.fromByteUnits(16))
+        .init(allocator);
     defer request.deinit();
 
     try request.ensureTotalCapacity(constants.message_body_size_max);
 
-    var reply = std.ArrayListAligned(u8, 16).init(allocator);
+    var reply = std.array_list
+        .AlignedManaged(u8, std.mem.Alignment.fromByteUnits(16))
+        .init(allocator);
     defer reply.deinit();
 
     var operation: ?TestContext.Operation = null;
@@ -946,7 +950,7 @@ fn check_version(
 
                 const reply_actual_buffer = try allocator.alignedAlloc(
                     u8,
-                    16,
+                    std.mem.Alignment.fromByteUnits(16),
                     constants.message_body_size_max,
                 );
                 defer allocator.free(reply_actual_buffer);
@@ -2868,7 +2872,11 @@ test "StateMachine: batch_elements_max" {
 // the former single-batch format.
 test "StateMachine: input_valid" {
     const allocator = std.testing.allocator;
-    const input = try allocator.alignedAlloc(u8, 16, 2 * constants.message_body_size_max);
+    const input = try allocator.alignedAlloc(
+        u8,
+        std.mem.Alignment.fromByteUnits(16),
+        2 * constants.message_body_size_max,
+    );
     defer allocator.free(input);
 
     const build_input = struct {
@@ -2965,7 +2973,11 @@ test "StateMachine: input_valid" {
 // number of results that can fit in the reply message.
 test "StateMachine: query multi-batch input_valid" {
     const allocator = std.testing.allocator;
-    const input = try allocator.alignedAlloc(u8, 16, 2 * constants.message_body_size_max);
+    const input = try allocator.alignedAlloc(
+        u8,
+        std.mem.Alignment.fromByteUnits(16),
+        2 * constants.message_body_size_max,
+    );
     defer allocator.free(input);
 
     var context: TestContext = undefined;

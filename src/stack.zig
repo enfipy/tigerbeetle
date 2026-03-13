@@ -159,7 +159,7 @@ test "Stack: fuzz" {
     });
 
     // Reference model: a dynamic array of node IDs in Stack order (last is the top).
-    var model = try std.ArrayList(u32).initCapacity(allocator, item_count_max);
+    var model = try std.array_list.Managed(u32).initCapacity(allocator, item_count_max);
     defer model.deinit();
 
     // Run a sequence of randomized events.

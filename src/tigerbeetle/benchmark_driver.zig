@@ -14,7 +14,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ChildProcess = std.process.Child;
 
 const vsr = @import("vsr");
 const cli = @import("./cli.zig");
@@ -28,11 +27,21 @@ pub fn command_benchmark(
     time: vsr.time.Time,
     args: *const cli.Command.Benchmark,
 ) !void {
+    var process_threaded = std.Io.Threaded.init(allocator, .{
+        .environ = if (std.Options.debug_threaded_io) |threaded|
+            threaded.environ.process_environ
+        else
+            std.process.Environ.empty,
+    });
+    defer process_threaded.deinit();
+
+    const process_io = process_threaded.ioBasic();
+
     // Note: we intentionally don't use a temporary directory for this data file, and instead just
     // put it into CWD, as performance of TigerBeetle very much depends on a specific file system.
     const data_file = args.file orelse data_file: {
         var random_bytes: [4]u8 = undefined;
-        std.crypto.random.bytes(&random_bytes);
+        std.Options.debug_io.random(&random_bytes);
         const random_suffix: [8]u8 = std.fmt.bytesToHex(random_bytes, .lower);
         break :data_file "0_0-" ++ random_suffix ++ ".tigerbeetle.benchmark";
     };
@@ -40,25 +49,30 @@ pub fn command_benchmark(
     var data_file_created = false;
     defer {
         if (data_file_created and args.file == null) {
-            std.fs.cwd().deleteFile(data_file) catch {};
+            std.Io.Dir.deleteFile(std.Io.Dir.cwd(), std.Options.debug_io, data_file) catch {};
         }
     }
 
     var tigerbeetle_process: ?TigerBeetleProcess = null;
     defer if (tigerbeetle_process) |*p| {
-        _ = p.deinit();
+        _ = p.deinit(process_io);
     };
 
-    var maybe_stat_empty: ?std.fs.File.Stat = null;
+    var maybe_stat_empty: ?std.Io.File.Stat = null;
     if (args.addresses == null) {
-        const me = try std.fs.selfExePathAlloc(allocator);
+        const me = try std.process.executablePathAlloc(std.Options.debug_io, allocator);
         defer allocator.free(me);
 
-        try format(allocator, .{ .tigerbeetle = me, .data_file = data_file });
+        try format(allocator, process_io, .{ .tigerbeetle = me, .data_file = data_file });
         data_file_created = true;
-        maybe_stat_empty = try std.fs.cwd().statFile(data_file);
+        maybe_stat_empty = try std.Io.Dir.statFile(
+            std.Io.Dir.cwd(),
+            std.Options.debug_io,
+            data_file,
+            .{},
+        );
 
-        tigerbeetle_process = try start(allocator, .{
+        tigerbeetle_process = try start(allocator, process_io, .{
             .tigerbeetle = me,
             .data_file = data_file,
             .args = args,
@@ -91,31 +105,38 @@ pub fn command_benchmark(
     try benchmark_load.main(allocator, io, time, addresses, args);
 
     if (tigerbeetle_process) |*p| {
-        const rusage = p.deinit();
+        const rusage = p.deinit(process_io);
         tigerbeetle_process = null;
 
         if (rusage.getMaxRss()) |max_rss_bytes| {
-            std.io.getStdOut().writer().print("\nrss = {} bytes\n", .{max_rss_bytes}) catch {};
+            var stdout_buffer: [128]u8 = undefined;
+            var stdout_writer = std.Io.File.stdout().writer(std.Options.debug_io, &stdout_buffer);
+            stdout_writer.interface.print("\nrss = {} bytes\n", .{max_rss_bytes}) catch {};
+            stdout_writer.flush() catch {};
         }
     }
 
     if (data_file_created) {
-        const stat = try std.fs.cwd().statFile(data_file);
+        const stat = try std.Io.Dir.statFile(
+            std.Io.Dir.cwd(),
+            std.Options.debug_io,
+            data_file,
+            .{},
+        );
         if (maybe_stat_empty) |stat_empty| {
-            try std.io.getStdOut().writer().print("\ndatafile empty = {} bytes\n", .{
+            std.debug.print("\ndatafile empty = {} bytes\n", .{
                 stat_empty.size,
             });
         }
-        try std.io.getStdOut().writer().print("datafile = {} bytes\n", .{stat.size});
+        std.debug.print("datafile = {} bytes\n", .{stat.size});
     }
 }
 
-fn format(allocator: std.mem.Allocator, options: struct {
+fn format(allocator: std.mem.Allocator, process_io: std.Io, options: struct {
     tigerbeetle: []const u8,
     data_file: []const u8,
 }) !void {
-    const format_result = try ChildProcess.run(.{
-        .allocator = allocator,
+    const format_result = try std.process.run(allocator, process_io, .{
         .argv = &.{
             options.tigerbeetle,
             "format",
@@ -132,22 +153,25 @@ fn format(allocator: std.mem.Allocator, options: struct {
     errdefer log.err("stderr: {s}", .{format_result.stderr});
 
     switch (format_result.term) {
-        .Exited => |code| if (code != 0) return error.BadFormat,
+        .exited => |code| if (code != 0) return error.BadFormat,
         else => return error.BadFormat,
     }
 }
 
 const TigerBeetleProcess = struct {
     child: std.process.Child,
-    address: std.net.Address,
+    address: std.Io.net.IpAddress,
 
-    fn deinit(self: *TigerBeetleProcess) std.process.Child.ResourceUsageStatistics {
+    fn deinit(
+        self: *TigerBeetleProcess,
+        process_io: std.Io,
+    ) std.process.Child.ResourceUsageStatistics {
         // Although we could just kill the child here, let's exercise the "normal" termination logic
         // through stdin closure, such that, from the perspective of the child, there's no
         // difference between the parent process exiting normally or just crashing.
-        self.child.stdin.?.close();
+        self.child.stdin.?.close(std.Options.debug_io);
         self.child.stdin = null;
-        _ = self.child.wait() catch {};
+        _ = self.child.wait(process_io) catch {};
 
         defer self.* = undefined;
 
@@ -155,7 +179,7 @@ const TigerBeetleProcess = struct {
     }
 };
 
-fn start(allocator: std.mem.Allocator, options: struct {
+fn start(allocator: std.mem.Allocator, process_io: std.Io, options: struct {
     tigerbeetle: []const u8,
     data_file: []const u8,
     args: *const cli.Command.Benchmark,
@@ -203,25 +227,30 @@ fn start(allocator: std.mem.Allocator, options: struct {
     }
 
     try start_args.append(arena.allocator(), options.data_file);
-    var child = std.process.Child.init(start_args.items, allocator);
-
-    child.request_resource_usage_statistics = true;
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Inherit;
-    try child.spawn();
+    var child = try std.process.spawn(process_io, .{
+        .argv = start_args.items,
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .inherit,
+        .request_resource_usage_statistics = true,
+    });
     errdefer {
-        _ = child.kill() catch {};
+        child.kill(process_io);
     }
 
-    const port = port: {
-        errdefer log.err("failed to read port number from tigerbeetle process", .{});
-        var port_buf: [std.fmt.count("{}\n", .{std.math.maxInt(u16)})]u8 = undefined;
-        const port_buf_len = try child.stdout.?.readAll(&port_buf);
-        break :port try std.fmt.parseInt(u16, port_buf[0 .. port_buf_len - 1], 10);
-    };
+    const port = try read_started_port(&child);
 
-    const address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
+    const address: std.Io.net.IpAddress = .{ .ip4 = .loopback(port) };
 
     return .{ .child = child, .address = address };
+}
+
+fn read_started_port(child: *std.process.Child) !u16 {
+    errdefer log.err("failed to read port number from tigerbeetle process", .{});
+
+    var port_buf: [std.fmt.count("{}\n", .{std.math.maxInt(u16)})]u8 = undefined;
+    var stdout_reader = child.stdout.?.reader(std.Options.debug_io, &port_buf);
+    const port_buf_slice = (try stdout_reader.interface.takeDelimiter('\n')) orelse
+        return error.InvalidPort;
+    return try std.fmt.parseInt(u16, port_buf_slice, 10);
 }

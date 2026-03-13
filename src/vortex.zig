@@ -36,7 +36,7 @@ const WorkloadArgs = struct {
     driver_command: []const u8,
 };
 
-pub fn main() !void {
+pub fn main(process: std.process.Init) !void {
     comptime assert(builtin.target.cpu.arch.endian() == .little);
 
     if (builtin.os.tag == .windows) {
@@ -52,7 +52,7 @@ pub fn main() !void {
 
     const allocator = gpa_allocator.allocator();
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = try std.process.Args.Iterator.initAllocator(process.minimal.args, allocator);
     defer args.deinit();
 
     switch (stdx.flags(&args, CLIArgs)) {
@@ -60,9 +60,7 @@ pub fn main() !void {
         .workload => |driver_args| {
             var driver = try start_driver(allocator, driver_args);
             defer {
-                _ = driver.kill() catch {
-                    log.err("failed to kill driver", .{});
-                };
+                if (driver.id != null) driver.kill(std.Options.debug_io);
             }
 
             try Workload.main(allocator, &.{
@@ -74,7 +72,7 @@ pub fn main() !void {
 }
 
 fn start_driver(allocator: std.mem.Allocator, args: WorkloadArgs) !std.process.Child {
-    var argv = std.ArrayList([]const u8).init(allocator);
+    var argv = std.array_list.Managed([]const u8).init(allocator);
     defer argv.deinit();
 
     assert(std.mem.indexOfScalar(u8, args.driver_command, '"') == null);
@@ -90,12 +88,10 @@ fn start_driver(allocator: std.mem.Allocator, args: WorkloadArgs) !std.process.C
     try argv.append(cluster);
     try argv.append(args.addresses);
 
-    var child = std.process.Child.init(argv.items, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Inherit;
-
-    try child.spawn();
-
-    return child;
+    return try std.process.spawn(std.Options.debug_io, .{
+        .argv = argv.items,
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .inherit,
+    });
 }

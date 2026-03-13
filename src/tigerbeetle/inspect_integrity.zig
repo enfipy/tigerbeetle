@@ -145,7 +145,10 @@ fn init(
     });
     errdefer integrity.storage.deinit();
 
-    const data_file_stat = try (std.fs.File{ .handle = integrity.storage.fd }).stat();
+    const data_file_stat = try (std.Io.File{
+        .handle = integrity.storage.fd,
+        .flags = .{ .nonblocking = false },
+    }).stat(std.Options.debug_io);
 
     integrity.superblock = try SuperBlock.init(
         gpa,
@@ -225,20 +228,20 @@ fn init(
         gpa,
         // Safe estimation for the maximum number of grid blocks based on file size. Using
         // storage_size_limit_max would increase the memory usage dramatically for small data files.
-        @divFloor(data_file_stat.size, constants.block_size),
+        @as(usize, @intCast(@divFloor(data_file_stat.size, constants.block_size))),
     );
     errdefer integrity.grid_blocks_scrubbed.deinit(gpa);
 
     integrity.buffer_headers = try gpa.alignedAlloc(
         u8,
-        constants.sector_size,
+        std.mem.Alignment.fromByteUnits(constants.sector_size),
         constants.journal_size_headers,
     );
     errdefer gpa.free(integrity.buffer_headers);
 
     integrity.buffer_prepare = try gpa.alignedAlloc(
         u8,
-        constants.sector_size,
+        std.mem.Alignment.fromByteUnits(constants.sector_size),
         constants.message_size_max,
     );
     errdefer gpa.free(integrity.buffer_prepare);
@@ -393,14 +396,13 @@ fn check_grid(integrity: *Integrity, seed: u64) !u64 {
     var prng = stdx.PRNG.from_seed(seed);
     integrity.grid_scrubber.open(&prng);
 
-    const parent_progress_node = std.Progress.start(.{
+    const parent_progress_node = std.Progress.start(std.Options.debug_io, .{
         .root_name = "checking grid blocks",
         .estimated_total_items = blocks_expected_count,
     });
     defer parent_progress_node.end();
 
-    var timer = try std.time.Timer.start();
-    timer.reset();
+    const start_ns = std.Io.Timestamp.now(std.Options.debug_io, .boot).toNanoseconds();
 
     while (true) {
         for (0..integrity.grid_scrubber.reads.available() + 1) |_| {
@@ -435,7 +437,9 @@ fn check_grid(integrity: *Integrity, seed: u64) !u64 {
 
         try integrity.io.run_for_ns(constants.tick_ms * std.time.ns_per_ms);
     }
-    const grid_duration_ms = stdx.div_ceil(timer.read(), std.time.ns_per_ms);
+    const end_ns = std.Io.Timestamp.now(std.Options.debug_io, .boot).toNanoseconds();
+    const elapsed_ns: u64 = @intCast(end_ns - start_ns);
+    const grid_duration_ms = stdx.div_ceil(elapsed_ns, std.time.ns_per_ms);
 
     assert(integrity.grid_scrubber.tour == .done and
         integrity.grid_scrubber.reads.executing() == 0);

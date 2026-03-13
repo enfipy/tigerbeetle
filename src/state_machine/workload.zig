@@ -460,9 +460,9 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
         ) usize {
             switch (action) {
                 inline else => |action_comptime| {
-                    const operation_comptime = comptime std.enums.nameCast(
+                    const operation_comptime = comptime @field(
                         Operation,
-                        action_comptime,
+                        @tagName(action_comptime),
                     );
                     const Event = operation_comptime.EventType();
                     const event_size: u32 = operation_comptime.event_size();
@@ -978,7 +978,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
                     },
                 }
 
-                const operation = comptime std.enums.nameCast(Operation, action);
+                const operation = comptime @field(Operation, @tagName(action));
                 const batch_result_max = operation.result_max(self.options.batch_size_limit);
                 account_filter.limit = switch (self.prng.enum_uniform(enum {
                     zero,
@@ -1012,7 +1012,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             assert(body.len == 1);
             const query_filter = &body[0];
 
-            const operation = comptime std.enums.nameCast(Operation, action);
+            const operation = comptime @field(Operation, @tagName(action));
             const batch_result_max = operation.result_max(self.options.batch_size_limit);
             const limit: u32 = switch (self.prng.enum_uniform(enum {
                 zero,

@@ -13,6 +13,7 @@
 ///!
 ///! Additionally, each function is unit tested against a real JVM to validate if they are
 ///! calling the correct vtable entry with the expected arguments.
+const std = @import("std");
 
 // https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getversion.
 pub const jni_version_1_1: JInt = 0x00010001;
@@ -3205,11 +3206,29 @@ fn JNIInterfaceType(comptime T: type) type {
     return struct {
         fn JniFnType(comptime function: T.FunctionTable) type {
             const Fn = @TypeOf(@field(T, @tagName(function)));
-            var fn_info = @typeInfo(Fn);
-            switch (fn_info) {
-                .@"fn" => {
-                    fn_info.@"fn".calling_convention = .c;
-                    return @Type(fn_info);
+            switch (@typeInfo(Fn)) {
+                .@"fn" => |fn_info| {
+                    var param_types: [fn_info.params.len]type = undefined;
+                    var param_attrs: [fn_info.params.len]std.builtin.Type.Fn.Param.Attributes =
+                        undefined;
+                    for (fn_info.params, 0..) |param, i| {
+                        param_types[i] = param.type orelse @compileError(
+                            "Expected function parameter type for " ++ @tagName(function),
+                        );
+                        param_attrs[i] = .{ .@"noalias" = param.is_noalias };
+                    }
+
+                    return @Fn(
+                        &param_types,
+                        &param_attrs,
+                        fn_info.return_type orelse @compileError(
+                            "Expected function return type for " ++ @tagName(function),
+                        ),
+                        .{
+                            .@"callconv" = .c,
+                            .varargs = fn_info.is_var_args,
+                        },
+                    );
                 },
                 else => @compileError("Expected " ++ @tagName(function) ++ " to be a function"),
             }

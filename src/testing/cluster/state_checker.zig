@@ -12,7 +12,7 @@ const MessagePool = message_pool.MessagePool;
 const Message = MessagePool.Message;
 
 const ReplicaSet = stdx.BitSetType(constants.members_max);
-const Commits = std.ArrayList(struct {
+const Commits = std.array_list.Managed(struct {
     header: vsr.Header.Prepare,
     // null for operation=root and operation=upgrade
     release: ?vsr.Release,

@@ -53,7 +53,7 @@ pub fn validate_release(shell: *Shell, gpa: std.mem.Allocator, options: struct {
 
     try shell.env.put("TB_ADDRESS", tmp_beetle.port_str);
 
-    try shell.cwd.writeFile(.{ .sub_path = "pom.xml", .data = try shell.fmt(
+    try shell.cwd.writeFile(std.Options.debug_io, .{ .sub_path = "pom.xml", .data = try shell.fmt(
         \\<project>
         \\  <modelVersion>4.0.0</modelVersion>
         \\  <groupId>com.tigerbeetle</groupId>
@@ -123,7 +123,11 @@ pub fn validate_release(shell: *Shell, gpa: std.mem.Allocator, options: struct {
             log.warn("waiting for 5 minutes for the {s} version to appear in maven cental", .{
                 options.version,
             });
-            std.time.sleep(5 * std.time.ns_per_min);
+            try std.Io.sleep(
+                std.Options.debug_io,
+                .{ .nanoseconds = 5 * std.time.ns_per_min },
+                .awake,
+            );
         }
     } else {
         shell.exec("mvn package --update-snapshots", .{}) catch |err| {

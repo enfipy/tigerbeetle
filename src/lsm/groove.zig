@@ -320,22 +320,8 @@ pub fn GrooveType(
         break :blk TreeType(Table, Storage);
     };
 
-    const _IndexTrees = @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = index_fields,
-            .decls = &.{},
-            .is_tuple = false,
-        },
-    });
-    const _IndexTreeOptions = @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = &index_options_fields,
-            .decls = &.{},
-            .is_tuple = false,
-        },
-    });
+    const _IndexTrees = stdx.StructFromFieldsType(index_fields);
+    const _IndexTreeOptions = stdx.StructFromFieldsType(&index_options_fields);
 
     const has_scan = index_fields.len > 0;
 

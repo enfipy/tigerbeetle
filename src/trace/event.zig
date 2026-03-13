@@ -28,12 +28,7 @@ const Operation = operation_enum: {
         }
     }
 
-    break :operation_enum @Type(.{ .@"enum" = .{
-        .tag_type = u8,
-        .fields = operation_fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    break :operation_enum stdx.EnumFromFieldsType(u8, operation_fields, true);
 };
 
 const TreeEnum = tree_enum: {
@@ -50,12 +45,7 @@ const TreeEnum = tree_enum: {
         }
     }
 
-    break :tree_enum @Type(.{ .@"enum" = .{
-        .tag_type = u32,
-        .fields = tree_fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    break :tree_enum stdx.EnumFromFieldsType(u32, tree_fields, true);
 };
 
 /// Returns the count of an exhaustive enum.
@@ -341,15 +331,10 @@ pub const EventTiming = union(Event.Tag) {
     }
 
     pub fn format(
-        event: *const EventTiming,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-
-        switch (event.*) {
+        event: EventTiming,
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        switch (event) {
             inline else => |data| {
                 try format_data(data, writer);
             },
@@ -477,15 +462,10 @@ pub const EventTracing = union(Event.Tag) {
     }
 
     pub fn format(
-        event: *const EventTracing,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-
-        switch (event.*) {
+        event: EventTracing,
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        switch (event) {
             inline else => |data| {
                 try format_data(data, writer);
             },

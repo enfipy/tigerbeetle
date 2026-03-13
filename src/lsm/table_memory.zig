@@ -746,7 +746,7 @@ test "table_memory: merge and absorb (last wins across streams)" {
     }
 
     try snap(@src(),
-        \\{ { 2, 1 }, { 4, 0 }, { 5, 0 } }
+        \\{ .{ 2, 1 }, .{ 4, 0 }, .{ 5, 0 } }
     ).diff_fmt("{any}", .{keys});
 }
 
@@ -800,7 +800,7 @@ test "table_memory: compact and deduplicate across runs" {
     }
 
     try snap(@src(),
-        \\{ { 2, 3 } }
+        \\{ .{ 2, 3 } }
     ).diff_fmt("{any}", .{keys});
 }
 

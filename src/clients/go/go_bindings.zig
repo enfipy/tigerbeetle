@@ -364,7 +364,7 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var buffer = std.ArrayList(u8).init(allocator);
+    var buffer = std.array_list.Managed(u8).init(allocator);
     try generate_bindings(&buffer);
     try std.io.getStdOut().writeAll(buffer.items);
 }

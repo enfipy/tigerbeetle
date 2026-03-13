@@ -40,12 +40,8 @@ pub const Ratio = struct {
 
     pub fn format(
         r: Ratio,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
         if (r.numerator == 0) return writer.print("0", .{});
         return writer.print("{d}/{d}", .{ r.numerator, r.denominator });
     }
@@ -156,7 +152,7 @@ test next {
     }
     try snap(@src(),
         \\{ 134, 134, 117, 121, 117, 128, 131, 118 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 pub fn fill(prng: *PRNG, target: []u8) void {
@@ -207,7 +203,7 @@ test fill {
 
     try snap(@src(),
         \\{ 3120, 3084, 3089, 3103, 3092, 3120, 3074, 3086 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 /// Generate an unbiased, uniformly distributed integer r such that 0 ≤ r ≤ max.
@@ -267,7 +263,7 @@ test int_inclusive {
     }
     try snap(@src(),
         \\{ 123, 127, 115, 125, 125, 139, 111, 135 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 
     var large: u32 = 0;
     var small: u32 = 0;
@@ -305,7 +301,7 @@ test index {
     }
     try snap(@src(),
         \\{ 9, 13, 13, 11, 10, 16, 16, 12 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 /// Generates a uniform, unbiased integer r such that max ≤ r ≤ max.
@@ -360,7 +356,7 @@ fn test_bytes_int(Int: type, want: Snap) !void {
     for (0..1000) |_| {
         distribution[@intCast(prng.int(Int) % 8)] += 1;
     }
-    try want.diff_fmt("{d}", .{distribution});
+    try want.diff_fmt("{any}", .{distribution});
 }
 
 /// Returns true with probability 0.5.
@@ -669,7 +665,13 @@ test "no floating point please" {
     });
     defer std.testing.allocator.free(path);
 
-    const file_text = try std.fs.cwd().readFileAlloc(std.testing.allocator, path, 64 * KiB);
+    const file_text = try std.Io.Dir.readFileAlloc(
+        std.Io.Dir.cwd(),
+        std.Options.debug_io,
+        path,
+        std.testing.allocator,
+        .limited(64 * KiB),
+    );
     defer std.testing.allocator.free(file_text);
 
     assert(std.mem.indexOf(u8, file_text, "f" ++ "32") == null);

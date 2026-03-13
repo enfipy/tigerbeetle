@@ -3,8 +3,6 @@ const assert = std.debug.assert;
 const ewah = @import("ewah.zig").ewah(usize);
 const stdx = @import("stdx");
 
-const log = std.log;
-
 const BitSetConfig = struct {
     words: usize,
     run_length_e: usize,
@@ -47,14 +45,14 @@ test "benchmark: ewah" {
             bitsets[i] = try make_bitset(allocator, config);
             bitsets_encoded[i] = try allocator.alignedAlloc(
                 u8,
-                @alignOf(usize),
+                std.mem.Alignment.fromByteUnits(@alignOf(usize)),
                 ewah.encode_size_max(bitsets[i].len),
             );
             bitsets_decoded[i] = try allocator.alloc(usize, config.words);
         }
 
         // Benchmark encoding.
-        var encode_timer = try std.time.Timer.start();
+        const encode_start = std.Io.Timestamp.now(std.Options.debug_io, .boot);
         i = 0;
         while (i < samples) : (i += 1) {
             var j: usize = 0;
@@ -64,9 +62,16 @@ test "benchmark: ewah" {
             }
             bitset_lengths[i] = size;
         }
-        const encode_time = encode_timer.read() / samples / repeats;
+        const encode_time: u64 = @intCast(
+            @divFloor(
+                encode_start
+                    .durationTo(std.Io.Timestamp.now(std.Options.debug_io, .boot))
+                    .nanoseconds,
+                samples * repeats,
+            ),
+        );
 
-        var decode_timer = try std.time.Timer.start();
+        const decode_start = std.Io.Timestamp.now(std.Options.debug_io, .boot);
         // Benchmark decoding.
         i = 0;
         while (i < samples) : (i += 1) {
@@ -76,7 +81,14 @@ test "benchmark: ewah" {
                 _ = ewah.decode_all(bitset_encoded, bitsets_decoded[i]);
             }
         }
-        const decode_time = decode_timer.read() / samples / repeats;
+        const decode_time: u64 = @intCast(
+            @divFloor(
+                decode_start
+                    .durationTo(std.Io.Timestamp.now(std.Options.debug_io, .boot))
+                    .nanoseconds,
+                samples * repeats,
+            ),
+        );
 
         i = 0;
         while (i < samples) : (i += 1) {
@@ -92,16 +104,17 @@ test "benchmark: ewah" {
             total_compressed += @as(f64, @floatFromInt(bitset_lengths[i]));
         }
 
-        log.info(
-            \\Words={:_>3} E(Run)={:_>3} E(Literal)={:_>3} EncTime={:_>6}ns DecTime={:_>6}ns Ratio={d:_>6.2}
-        , .{
-            config.words,
-            config.run_length_e,
-            config.literals_length_e,
-            encode_time,
-            decode_time,
-            total_uncompressed / total_compressed,
-        });
+        std.debug.print(
+            "Words={:_>3} E(Run)={:_>3} E(Literal)={:_>3} EncTime={:_>6}ns DecTime={:_>6}ns Ratio={d:_>6.2}\n",
+            .{
+                config.words,
+                config.run_length_e,
+                config.literals_length_e,
+                encode_time,
+                decode_time,
+                total_uncompressed / total_compressed,
+            },
+        );
     }
 }
 

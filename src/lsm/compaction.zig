@@ -240,10 +240,8 @@ pub fn ResourcePoolType(comptime Grid: type) type {
 
         pub fn format(
             self: @This(),
-            comptime _: []const u8,
-            _: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
+            writer: *std.Io.Writer,
+        ) std.Io.Writer.Error!void {
             return writer.print("ResourcePool{{ " ++
                 ".reads = {}/{},  .writes = {}/{}, .cpus = {}/{}, .blocks = {}/{} }}", .{
                 self.reads.available(),  self.reads.total(),
@@ -284,10 +282,8 @@ pub fn CompactionType(comptime Tree: type, comptime Storage: type) type {
 
             pub fn format(
                 self: @This(),
-                comptime _: []const u8,
-                _: std.fmt.FormatOptions,
-                writer: anytype,
-            ) !void {
+                writer: *std.Io.Writer,
+            ) std.Io.Writer.Error!void {
                 return writer.print("Position{{ .index_block = {}, " ++
                     ".value_block = {}, .value = {} }}", .{
                     self.index_block,

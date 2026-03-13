@@ -203,11 +203,11 @@ pub const IO = struct {
                 overlapped: Overlapped,
                 listen_socket: socket_t,
                 client_socket: ?socket_t,
-                addr_buffer: [(@sizeOf(std.net.Address) + 16) * 2]u8 align(4),
+                addr_buffer: [(@sizeOf(std.Io.net.IpAddress) + 16) * 2]u8 align(4),
             },
             connect: struct {
                 socket: socket_t,
-                address: std.net.Address,
+                address: std.Io.net.IpAddress,
                 overlapped: Overlapped,
                 pending: bool,
             },
@@ -379,8 +379,8 @@ pub const IO = struct {
                             op.client_socket.?,
                             &op.addr_buffer,
                             0,
-                            @sizeOf(std.net.Address) + 16,
-                            @sizeOf(std.net.Address) + 16,
+                            @sizeOf(std.Io.net.IpAddress) + 16,
+                            @sizeOf(std.Io.net.IpAddress) + 16,
                             &sync_bytes_read,
                             &op.overlapped.raw,
                         );
@@ -457,7 +457,7 @@ pub const IO = struct {
         ) void,
         completion: *Completion,
         socket: socket_t,
-        address: std.net.Address,
+        address: std.Io.net.IpAddress,
     ) void {
         self.submit(
             context,
@@ -489,7 +489,7 @@ pub const IO = struct {
 
                         // ConnectEx requires the socket to be initially bound (INADDR_ANY).
                         const inaddr_any: [4]u8 = @splat(0);
-                        const bind_addr = std.net.Address.initIp4(inaddr_any, 0);
+                        const bind_addr = std.Io.net.IpAddress.initIp4(inaddr_any, 0);
                         posix.bind(
                             op.socket,
                             &bind_addr.any,
@@ -1176,9 +1176,9 @@ pub const IO = struct {
     pub fn listen(
         _: *IO,
         fd: socket_t,
-        address: std.net.Address,
+        address: std.Io.net.IpAddress,
         options: ListenOptions,
-    ) !std.net.Address {
+    ) !std.Io.net.IpAddress {
         return common.listen(fd, address, options);
     }
 
@@ -1421,9 +1421,13 @@ pub const IO = struct {
         }
     }
 
-    pub const PReadError = posix.PReadError;
+    pub const PReadError = common.AOFBlockingPReadError;
 
-    pub fn aof_blocking_write_all(_: *IO, fd: fd_t, buffer: []const u8) posix.WriteError!void {
+    pub fn aof_blocking_write_all(
+        _: *IO,
+        fd: fd_t,
+        buffer: []const u8,
+    ) common.AOFBlockingWriteError!void {
         return common.aof_blocking_write_all(fd, buffer);
     }
 
@@ -1435,11 +1439,17 @@ pub const IO = struct {
         return common.aof_blocking_close(fd);
     }
 
-    pub fn aof_blocking_stat(_: *IO, path: []const u8) std.fs.Dir.StatFileError!std.fs.File.Stat {
+    pub fn aof_blocking_stat(
+        _: *IO,
+        path: []const u8,
+    ) common.AOFBlockingStatError!std.Io.File.Stat {
         return common.aof_blocking_stat(path);
     }
 
-    pub fn aof_blocking_fstat(_: *IO, fd: fd_t) std.fs.Dir.StatError!std.fs.File.Stat {
+    pub fn aof_blocking_fstat(
+        _: *IO,
+        fd: fd_t,
+    ) common.AOFBlockingFStatError!std.Io.File.Stat {
         return common.aof_blocking_fstat(fd);
     }
 

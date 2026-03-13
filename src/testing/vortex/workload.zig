@@ -42,7 +42,12 @@ const events_count_max = 8189;
 const pending_transfers_count_max = 1024;
 const accounts_count_max = 128;
 
-const DriverStdio = struct { input: std.fs.File, output: std.fs.File };
+const DriverStdio = struct { input: std.Io.File, output: std.Io.File };
+
+fn now_micros() u64 {
+    const timestamp = std.Io.Timestamp.now(std.Options.debug_io, .boot);
+    return @intCast(@divFloor(timestamp.nanoseconds, std.time.ns_per_us));
+}
 
 pub fn main(
     allocator: std.mem.Allocator,
@@ -57,33 +62,38 @@ pub fn main(
 
     try model.pending_transfers.ensureTotalCapacity(allocator, pending_transfers_count_max);
 
-    const seed = std.crypto.random.int(u64);
+    var seed_bytes: [8]u8 = undefined;
+    std.Options.debug_io.random(&seed_bytes);
+    const seed = std.mem.readInt(u64, &seed_bytes, .little);
     var prng = stdx.PRNG.from_seed(seed);
 
-    const stdout = std.io.getStdOut().writer().any();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(std.Options.debug_io, &stdout_buffer);
 
     for (0..std.math.maxInt(u64)) |i| {
-        const command_timestamp_start: u64 = @intCast(std.time.microTimestamp());
+        const command_timestamp_start = now_micros();
         const command = random_command(&prng, &model);
         const result = try execute(command, driver) orelse break;
         try reconcile(result, &command, &model);
-        const command_timestamp_end: u64 = @intCast(std.time.microTimestamp());
-        try progress_write(stdout, .{
+        const command_timestamp_end = now_micros();
+        try progress_write(&stdout_writer.interface, .{
             .event_count = command.event_count(),
             .timestamp_start_micros = command_timestamp_start,
             .timestamp_end_micros = command_timestamp_end,
         });
+        try stdout_writer.interface.flush();
 
-        const query_timestamp_start: u64 = @intCast(std.time.microTimestamp());
+        const query_timestamp_start = now_micros();
         const query = lookup_all_accounts(&model);
         const query_result = try execute(query, driver) orelse break;
         try reconcile(query_result, &query, &model);
-        const query_timestamp_end: u64 = @intCast(std.time.microTimestamp());
-        try progress_write(stdout, .{
+        const query_timestamp_end = now_micros();
+        try progress_write(&stdout_writer.interface, .{
             .event_count = query.event_count(),
             .timestamp_start_micros = query_timestamp_start,
             .timestamp_end_micros = query_timestamp_end,
         });
+        try stdout_writer.interface.flush();
 
         log.info(
             "accounts created = {d}, transfers = {d}, pending transfers = {d}, commands run = {d}",
@@ -488,14 +498,7 @@ fn FixedSizeBuffersType(Union: type) type {
         i += 1;
     }
 
-    return @Type(.{
-        .@"struct" = .{
-            .is_tuple = false,
-            .fields = &struct_fields,
-            .layout = .auto,
-            .decls = &.{},
-        },
-    });
+    return stdx.StructFromFieldsType(&struct_fields);
 }
 
 pub fn send(
@@ -505,13 +508,15 @@ pub fn send(
 ) !void {
     assert(events.len <= events_count_max);
 
-    const writer = driver.input.writer().any();
+    var input_buffer: [4096]u8 = undefined;
+    var writer = driver.input.writer(std.Options.debug_io, &input_buffer);
 
-    try writer.writeInt(u8, @intFromEnum(operation), .little);
-    try writer.writeInt(u32, @intCast(events.len), .little);
+    try writer.interface.writeInt(u8, @intFromEnum(operation), .little);
+    try writer.interface.writeInt(u32, @intCast(events.len), .little);
 
     const bytes: []const u8 = std.mem.sliceAsBytes(events);
-    try writer.writeAll(bytes);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
 }
 
 pub fn receive(
@@ -520,13 +525,14 @@ pub fn receive(
     results: []operation.ResultType(),
 ) ![]operation.ResultType() {
     assert(results.len <= events_count_max);
-    const reader = driver.output.reader();
+    var output_buffer: [4096]u8 = undefined;
+    var reader = driver.output.reader(std.Options.debug_io, &output_buffer);
 
-    const results_count = try reader.readInt(u32, .little);
+    const results_count = try reader.interface.takeInt(u32, .little);
     assert(results_count <= results.len);
 
     const buf: []u8 = std.mem.sliceAsBytes(results[0..results_count]);
-    assert(try reader.readAtLeast(buf, buf.len) == buf.len);
+    try reader.interface.readSliceAll(buf);
 
     return results[0..results_count];
 }
@@ -538,6 +544,6 @@ pub const Progress = extern struct {
     timestamp_end_micros: u64,
 };
 
-fn progress_write(writer: std.io.AnyWriter, stats: Progress) !void {
+fn progress_write(writer: *std.Io.Writer, stats: Progress) !void {
     try writer.writeAll(std.mem.asBytes(&stats));
 }

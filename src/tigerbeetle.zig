@@ -427,7 +427,11 @@ pub const CreateTransferResult = enum(u32) {
         var type_info = @typeInfo(enum {});
         type_info.@"enum".tag_type = std.meta.Tag(CreateTransferResult);
         type_info.@"enum".fields = &fields;
-        break :type @Type(type_info);
+        break :type stdx.EnumFromFieldsType(
+            type_info.@"enum".tag_type,
+            type_info.@"enum".fields,
+            type_info.@"enum".is_exhaustive,
+        );
     };
 
     pub fn to_ordered(value: CreateTransferResult) Ordered {
