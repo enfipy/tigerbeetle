@@ -55,7 +55,7 @@ pub fn ReplType(comptime MessageBus: type) type {
 
         const Repl = @This();
 
-        fn fail(repl: *const Repl, comptime format: []const u8, arguments: anytype) !void {
+        fn fail(repl: *Repl, comptime format: []const u8, arguments: anytype) !void {
             if (!repl.interactive) {
                 try repl.terminal.print_error(format, arguments);
                 std.process.exit(1);
@@ -64,7 +64,7 @@ pub fn ReplType(comptime MessageBus: type) type {
             try repl.terminal.print(format, arguments);
         }
 
-        fn debug(repl: *const Repl, comptime format: []const u8, arguments: anytype) !void {
+        fn debug(repl: *Repl, comptime format: []const u8, arguments: anytype) !void {
             if (repl.debug_logs) {
                 try repl.terminal.print("[Debug] " ++ format, arguments);
             }
@@ -581,7 +581,7 @@ pub fn ReplType(comptime MessageBus: type) type {
 
             const statement = Parser.parse_statement(
                 input,
-                repl.terminal.stderr.any(),
+                &repl.terminal.stderr.interface,
                 arguments,
             ) catch |err| {
                 switch (err) {
@@ -621,7 +621,7 @@ pub fn ReplType(comptime MessageBus: type) type {
             io: *IO,
             time: Time,
             options: struct {
-                addresses: []const stdx.SocketAddress,
+                addresses: []const std.Io.net.IpAddress,
                 cluster_id: u128,
                 verbose: bool,
             },
@@ -691,9 +691,10 @@ pub fn ReplType(comptime MessageBus: type) type {
             repl.arguments.deinit(allocator);
         }
 
-        pub fn run(repl: *Repl, statements: []const u8) !void {
+        pub fn run(repl: *Repl, process_io: std.Io, statements: []const u8) !void {
             repl.interactive = statements.len == 0;
-            try Terminal.init(&repl.terminal, repl.interactive); // No corresponding deinit.
+            // No corresponding deinit.
+            try Terminal.init(&repl.terminal, process_io, repl.interactive);
 
             try Completion.init(&repl.completion);
 
@@ -723,7 +724,7 @@ pub fn ReplType(comptime MessageBus: type) type {
 
                         const statement = Parser.parse_statement(
                             statement_string,
-                            repl.terminal.stderr.any(),
+                            &repl.terminal.stderr.interface,
                             &repl.arguments,
                         ) catch |err| {
                             switch (err) {
@@ -731,7 +732,7 @@ pub fn ReplType(comptime MessageBus: type) type {
                                 // is not an interactive command, we should
                                 // exit immediately. Parsing error info
                                 // has already been emitted to stderr.
-                                error.ParseError => std.posix.exit(1),
+                                error.ParseError => std.process.exit(1),
 
                                 // An unexpected error for which we do
                                 // want the stacktrace.
@@ -820,7 +821,7 @@ pub fn ReplType(comptime MessageBus: type) type {
                 @TypeOf(object.*) == tb.CreateTransferResult);
 
             try repl.terminal.print("{{\n", .{});
-            inline for (@typeInfo(@TypeOf(object.*)).@"struct".fields, 0..) |object_field, i| {
+            inline for (stdx.type_fields(@TypeOf(object.*)), 0..) |object_field, i| {
                 if (comptime std.mem.eql(u8, object_field.name, "reserved")) {
                     continue;
                     // No need to print out reserved.
@@ -834,9 +835,9 @@ pub fn ReplType(comptime MessageBus: type) type {
                     try repl.terminal.print("  \"" ++ object_field.name ++ "\": [", .{});
                     var needs_comma = false;
 
-                    inline for (@typeInfo(object_field.type).@"struct".fields) |flag_field| {
+                    inline for (stdx.type_fields(object_field.type)) |flag_field| {
                         if (comptime !std.mem.eql(u8, flag_field.name, "padding")) {
-                            if (@field(@field(object, "flags"), flag_field.name)) {
+                            if (@field(@field(object.*, "flags"), flag_field.name)) {
                                 if (needs_comma) {
                                     try repl.terminal.print(",", .{});
                                     needs_comma = false;
@@ -849,14 +850,37 @@ pub fn ReplType(comptime MessageBus: type) type {
                     }
 
                     try repl.terminal.print("]", .{});
-                } else {
-                    try repl.terminal.print(
+                } else switch (@typeInfo(object_field.type)) {
+                    .@"enum" => try repl.terminal.print(
+                        "  \"{s}\": \"{s}.{s}\"",
+                        .{
+                            object_field.name,
+                            @typeName(object_field.type),
+                            @tagName(@field(object.*, object_field.name)),
+                        },
+                    ),
+                    else => try repl.terminal.print(
                         "  \"{s}\": \"{}\"",
-                        .{ object_field.name, @field(object, object_field.name) },
-                    );
+                        .{ object_field.name, @field(object.*, object_field.name) },
+                    ),
                 }
             }
             try repl.terminal.print("\n}}\n", .{});
+        }
+
+        fn display_object_bytes(repl: *Repl, comptime T: type, bytes: []const u8) !void {
+            assert(bytes.len % @sizeOf(T) == 0);
+            var index: usize = 0;
+            while (index < bytes.len) : (index += @sizeOf(T)) {
+                var object: T = undefined;
+                stdx.copy_left(
+                    .exact,
+                    u8,
+                    std.mem.asBytes(&object),
+                    bytes[index..][0..@sizeOf(T)],
+                );
+                try repl.display_object(&object);
+            }
         }
 
         fn client_request_completed(
@@ -879,76 +903,41 @@ pub fn ReplType(comptime MessageBus: type) type {
 
             switch (operation) {
                 .create_accounts => {
-                    const create_account_results = stdx.bytes_as_slice(
-                        .exact,
-                        tb.CreateAccountResult,
-                        result,
-                    );
-                    if (create_account_results.len == 0) {
+                    if (result.len == 0) {
                         try repl.fail("No accounts were created.\n", .{});
                     } else {
-                        for (create_account_results) |*create_result| {
-                            try repl.display_object(create_result);
-                        }
+                        try repl.display_object_bytes(tb.CreateAccountResult, result);
                     }
                 },
                 .lookup_accounts, .query_accounts => {
-                    const account_results = stdx.bytes_as_slice(
-                        .exact,
-                        tb.Account,
-                        result,
-                    );
-                    if (account_results.len == 0) {
+                    if (result.len == 0) {
                         try repl.fail("No accounts were found.\n", .{});
                     } else {
-                        for (account_results) |*account| {
-                            try repl.display_object(account);
-                        }
+                        try repl.display_object_bytes(tb.Account, result);
                     }
                 },
                 .create_transfers => {
-                    const create_transfer_results = stdx.bytes_as_slice(
-                        .exact,
-                        tb.CreateTransferResult,
-                        result,
-                    );
-                    if (create_transfer_results.len == 0) {
+                    if (result.len == 0) {
                         try repl.fail("No transfers were created.\n", .{});
                     } else {
-                        for (create_transfer_results) |*create_result| {
-                            try repl.display_object(create_result);
-                        }
+                        try repl.display_object_bytes(tb.CreateTransferResult, result);
                     }
                 },
                 .lookup_transfers,
                 .get_account_transfers,
                 .query_transfers,
                 => {
-                    const transfer_results = stdx.bytes_as_slice(
-                        .exact,
-                        tb.Transfer,
-                        result,
-                    );
-                    if (transfer_results.len == 0) {
+                    if (result.len == 0) {
                         try repl.fail("No transfers were found.\n", .{});
                     } else {
-                        for (transfer_results) |*transfer| {
-                            try repl.display_object(transfer);
-                        }
+                        try repl.display_object_bytes(tb.Transfer, result);
                     }
                 },
                 .get_account_balances => {
-                    const get_account_balances_results = stdx.bytes_as_slice(
-                        .exact,
-                        tb.AccountBalance,
-                        result,
-                    );
-                    if (get_account_balances_results.len == 0) {
+                    if (result.len == 0) {
                         try repl.fail("No balances were found.\n", .{});
                     } else {
-                        for (get_account_balances_results) |*balance| {
-                            try repl.display_object(balance);
-                        }
+                        try repl.display_object_bytes(tb.AccountBalance, result);
                     }
                 },
                 else => unreachable,

@@ -1,6 +1,9 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const stdx = @import("stdx.zig");
+const builtin = @import("builtin");
+
+extern "c" fn clock_gettime(clock_id: std.c.clockid_t, timespec: *std.c.timespec) c_int;
 
 /// A moment in monotonic time not anchored to any particular epoch.
 ///
@@ -75,13 +78,8 @@ pub const Duration = struct {
 
     // Human readable format like `1.123s`.
     // NB: this is a lossy operation, durations are rounded to look nice.
-    pub fn format(
-        duration: Duration,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        try std.fmt.fmtDuration(duration.ns).format(fmt, options, writer);
+    pub fn format(duration: Duration, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.print("{f}", .{fmt_duration(duration.ns)});
     }
 
     pub fn parse_flag_value(
@@ -207,6 +205,51 @@ test "Duration.parse_flag_value" {
 /// Timestamp is relative to epoch 1970-01-1.
 ///
 /// See also `Instant`.
+pub fn fmt_duration(ns: u64) std.fmt.Alt(u64, format_duration) {
+    return .{ .data = ns };
+}
+
+pub fn fmt_duration_signed(ns: i64) std.fmt.Alt(i64, format_duration_signed) {
+    return .{ .data = ns };
+}
+
+fn format_duration(ns: u64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    if (ns < std.time.ns_per_us) {
+        return writer.print("{}ns", .{ns});
+    } else if (ns < std.time.ns_per_ms) {
+        return format_duration_decimal(writer, ns, std.time.ns_per_us, "us");
+    } else if (ns < std.time.ns_per_s) {
+        return format_duration_decimal(writer, ns, std.time.ns_per_ms, "ms");
+    } else {
+        return format_duration_decimal(writer, ns, std.time.ns_per_s, "s");
+    }
+}
+
+fn format_duration_signed(ns: i64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    const magnitude: u64 = if (ns < 0) negative: {
+        try writer.writeByte('-');
+        break :negative @as(u64, @intCast(-(ns + 1))) + 1;
+    } else @intCast(ns);
+
+    return format_duration(magnitude, writer);
+}
+
+fn format_duration_decimal(
+    writer: *std.Io.Writer,
+    ns: u64,
+    unit: u64,
+    suffix: []const u8,
+) std.Io.Writer.Error!void {
+    const whole = ns / unit;
+    const fractional = (ns % unit) * 1000 / unit;
+
+    if (fractional == 0) {
+        return writer.print("{}{s}", .{ whole, suffix });
+    } else {
+        return writer.print("{}.{:0>3}{s}", .{ whole, fractional, suffix });
+    }
+}
+
 pub const InstantUnix = struct {
     ns: u64,
 
@@ -215,10 +258,43 @@ pub const InstantUnix = struct {
     }
 
     pub fn now() InstantUnix {
-        const timestamp_ns = std.time.nanoTimestamp();
+        const timestamp_ns = switch (builtin.os.tag) {
+            .linux => timestamp_ns_linux(),
+            .driverkit,
+            .ios,
+            .maccatalyst,
+            .macos,
+            .tvos,
+            .visionos,
+            .watchos,
+            => timestamp_ns_posix(),
+            .windows => timestamp_ns_windows(),
+            else => @compileError("unsupported OS"),
+        };
         assert(timestamp_ns > 0);
         assert(timestamp_ns <= std.math.maxInt(u64));
         return .{ .ns = @intCast(timestamp_ns) };
+    }
+
+    fn timestamp_ns_linux() i128 {
+        var timespec: std.os.linux.timespec = undefined;
+        assert(std.os.linux.clock_gettime(.REALTIME, &timespec) == 0);
+        return @as(i128, timespec.sec) * std.time.ns_per_s + timespec.nsec;
+    }
+
+    fn timestamp_ns_posix() i128 {
+        var timespec: std.c.timespec = undefined;
+        assert(clock_gettime(std.c.CLOCK.REALTIME, &timespec) == 0);
+        return @as(i128, timespec.sec) * std.time.ns_per_s + timespec.nsec;
+    }
+
+    fn timestamp_ns_windows() i128 {
+        var file_time: std.os.windows.FILETIME = undefined;
+        stdx.windows.get_system_time_precise_as_file_time(&file_time);
+        const ticks = (@as(u64, file_time.dwHighDateTime) << 32) | file_time.dwLowDateTime;
+        const windows_to_unix_epoch_100ns = 11644473600 * 10_000_000;
+        assert(ticks >= windows_to_unix_epoch_100ns);
+        return @as(i128, ticks - windows_to_unix_epoch_100ns) * 100;
     }
 
     pub fn from_timestamp_s(timestamp_s: u64) InstantUnix {
@@ -251,14 +327,7 @@ pub const InstantUnix = struct {
         };
     }
 
-    pub fn format(
-        instant: InstantUnix,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+    pub fn format(instant: InstantUnix, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const datetime = instant.date_time();
         try writer.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
             datetime.year,
@@ -281,11 +350,11 @@ test "InstantUnix format" {
     var buffer: [24]u8 = undefined;
     try std.testing.expectEqualStrings(
         "1970-01-01 00:00:00.000Z",
-        try std.fmt.bufPrint(&buffer, "{}", .{instant_min}),
+        try std.fmt.bufPrint(&buffer, "{f}", .{instant_min}),
     );
     const instant_max = InstantUnix{ .ns = std.math.maxInt(u64) };
     try std.testing.expectEqualStrings(
         "2554-07-21 23:34:33.709Z",
-        try std.fmt.bufPrint(&buffer, "{}", .{instant_max}),
+        try std.fmt.bufPrint(&buffer, "{f}", .{instant_max}),
     );
 }

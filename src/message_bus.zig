@@ -87,13 +87,13 @@ pub fn MessageBusType(comptime IO: type) type {
         }
 
         pub const Options = struct {
-            configuration: []const stdx.SocketAddress,
+            configuration: []const Address,
             io: *IO,
             trace: ?*Tracer,
             clients_limit: ?u32 = null,
             time: Time,
         };
-        const Address = stdx.SocketAddress;
+        const Address = std.Io.net.IpAddress;
         const MessageBus = @This();
 
         /// Initialize the MessageBus for the given configuration and replica/client process.
@@ -258,7 +258,7 @@ pub fn MessageBusType(comptime IO: type) type {
             bus.* = undefined;
         }
 
-        fn init_tcp(io: *IO, process: vsr.ProcessType, family: stdx.IPAddress.Family) !IO.socket_t {
+        fn init_tcp(io: *IO, process: vsr.ProcessType, family: u32) !IO.socket_t {
             return try io.open_socket_tcp(family, .{
                 .rcvbuf = constants.tcp_rcvbuf,
                 .sndbuf = switch (process) {
@@ -281,7 +281,11 @@ pub fn MessageBusType(comptime IO: type) type {
             assert(bus.accept_address == null);
 
             const address = bus.replicas_addresses[bus.process.replica];
-            const fd = try init_tcp(bus.io, .replica, address.ip.family());
+            const family: u32 = switch (address) {
+                .ip4 => std.posix.AF.INET,
+                .ip6 => std.posix.AF.INET6,
+            };
+            const fd = try init_tcp(bus.io, .replica, family);
             errdefer bus.io.close_socket(fd);
 
             const accept_address = try bus.io.listen(fd, address, .{
@@ -510,7 +514,10 @@ pub fn MessageBusType(comptime IO: type) type {
             assert(connection.state == .free);
             assert(connection.fd == null);
 
-            const family = bus.replicas_addresses[replica].ip.family();
+            const family: u32 = switch (bus.replicas_addresses[replica]) {
+                .ip4 => std.posix.AF.INET,
+                .ip6 => std.posix.AF.INET6,
+            };
             connection.fd = init_tcp(bus.io, bus.process, family) catch |err| {
                 log.err("{}: connect_to_replica: init_tcp error={s}", .{
                     bus.id,
@@ -1069,7 +1076,7 @@ pub fn MessageBusType(comptime IO: type) type {
                     // TODO: Investigate differences between shutdown() on Linux vs Darwin.
                     // Especially how this interacts with our assumptions around pending I/O.
                     bus.io.shutdown(connection.fd.?, .both) catch |err| switch (err) {
-                        error.SocketNotConnected => {
+                        error.SocketUnconnected => {
                             // This should only happen if we for some reason decide to terminate
                             // a connection while a connect operation is in progress.
                             // This is fine though, we simply continue with the logic below and
@@ -1087,9 +1094,9 @@ pub fn MessageBusType(comptime IO: type) type {
                         // Ignore all the remaining errors for now
                         error.ConnectionAborted,
                         error.ConnectionResetByPeer,
-                        error.BlockingOperationInProgress,
-                        error.NetworkSubsystemFailed,
+                        error.NetworkDown,
                         error.SystemResources,
+                        error.Canceled,
                         error.Unexpected,
                         => {},
                     };

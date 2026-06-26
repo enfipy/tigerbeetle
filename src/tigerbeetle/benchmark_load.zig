@@ -1,25 +1,14 @@
-//! Start TigerBeetle clients to run a workload against a cluster, measuring latency and throughput.
+//! Start TigerBeetle clients to run a workload (described below) against a cluster while measuring
+//! observed latencies and throughput.
 //!
-//! Workload Design:
+//! The benchmark only generates valid data -- i.e., all accounts/transfers succeed.
 //!
-//! Without arguments, `tigerbeetle benchmark` runs the "canonical workload", representative of the
-//! expected real-world workload. It outputs two numbers, throughput and latency. Performance is
-//! multidimensional and parametric, so treat this as a lossy compression problem:
-//!
-//!     What is the most important to communicate given zero inputs and two outputs?
-//!
-//! This default behavior matters for quickly assessing particular hardware or code changes, and it
-//! optimizes for human comprehension. The canonical workload isn't fixed, and default
-//! benchmark numbers are not necessarily comparable across different TigerBeetle versions.
-//!
-//! For debugging performance, it is useful to be able to simulate a wide variety of workloads, so
-//! `tigerbeetle benchmark` accepts a wide variety of arguments to override defaults.
-//!
-//! While TigerBeetle is optimized primarily for OLTP with extreme contention and almost exclusively
-//! read-modify-writes, it supports other workload profiles as well. Introduce symbolic names for
-//! workload kinds (e.g. `--read-heavy`), which desugar into low-level values of parameters, to
-//! capture our evolving understanding of real-world load patterns.
-
+//! Workload steps:
+//! 1. Create accounts.
+//! 2. Create transfers.
+//! 3. Query account transfers (`get_account_transfers`).
+//! 4. Lookup accounts (when verification is enabled).
+//! 5. Lookup transfers (when verification is enabled).
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
@@ -48,9 +37,10 @@ const cli = @import("./cli.zig");
 
 pub fn main(
     allocator: std.mem.Allocator,
+    process_io: std.Io,
     io: *IO,
     time: Time,
-    addresses: []const stdx.SocketAddress,
+    addresses: []const std.Io.net.IpAddress,
     cli_args: *const cli.Command.Benchmark,
 ) !void {
     if (builtin.mode != .ReleaseSafe and builtin.mode != .ReleaseFast) {
@@ -62,6 +52,13 @@ pub fn main(
     if (vsr.constants.config.process.verify) {
         log.warn("Extra assertions are enabled.", .{});
     }
+
+    var stdout_buffer: [std.heap.page_size_min]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(process_io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout_writer.flush() catch |err| {
+        log.err("error flushing stdout: {}", .{err});
+    };
 
     if (cli_args.account_count < 2) vsr.fatal(
         .cli,
@@ -139,14 +136,14 @@ pub fn main(
 
     const client_requests = try allocator.alignedAlloc(
         [constants.message_body_size_max]u8,
-        constants.cache_line_size,
+        .fromByteUnits(constants.cache_line_size),
         clients.count(),
     );
     defer allocator.free(client_requests);
 
     const client_replies = try allocator.alignedAlloc(
         [constants.message_body_size_max]u8,
-        constants.cache_line_size,
+        .fromByteUnits(constants.cache_line_size),
         clients.count(),
     );
     defer allocator.free(client_replies);
@@ -191,8 +188,8 @@ pub fn main(
     var benchmark = Benchmark{
         .io = io,
         .prng = &prng,
-        .timer = try std.time.Timer.start(),
-        .output = std.io.getStdOut().writer().any(),
+        .timer = vsr.time.Timer.init(time),
+        .output = stdout,
         .clients = clients.slice(),
         .client_timeouts = client_timeouts,
         .client_requests = client_requests,
@@ -245,7 +242,7 @@ pub fn main(
 
         benchmark.timer.reset();
         _ = vsr.checksum(buffer);
-        const checksum_duration_ns = benchmark.timer.read();
+        const checksum_duration_ns = benchmark.timer.read().ns;
 
         benchmark.output.print(
             \\message size max = {} bytes
@@ -291,7 +288,7 @@ const TbidGenerator = struct {
     random: u80,
 
     fn init(prng: *stdx.PRNG) TbidGenerator {
-        const epoch_ms: u128 = @intCast(std.time.milliTimestamp());
+        const epoch_ms: u128 = @intCast(@divFloor(stdx.InstantUnix.now().ns, std.time.ns_per_ms));
         return .{
             .prng = prng,
             .epoch_ms = epoch_ms,
@@ -300,7 +297,7 @@ const TbidGenerator = struct {
     }
 
     fn next(generator: *TbidGenerator) u128 {
-        const now: u128 = @intCast(std.time.milliTimestamp());
+        const now: u128 = @intCast(@divFloor(stdx.InstantUnix.now().ns, std.time.ns_per_ms));
 
         if (now > generator.epoch_ms) {
             // Time advanced: use new time and new random.
@@ -323,8 +320,8 @@ const TbidGenerator = struct {
 const Benchmark = struct {
     io: *IO,
     prng: *stdx.PRNG,
-    timer: std.time.Timer,
-    output: std.io.AnyWriter,
+    timer: vsr.time.Timer,
+    output: *std.Io.Writer,
     clients: []Client,
 
     // Configuration:
@@ -531,7 +528,7 @@ const Benchmark = struct {
         }
 
         const requests_complete = b.request_index - b.clients_busy.count();
-        const request_duration_ns = b.timer.read() - b.clients_request_ns[client_index];
+        const request_duration_ns = b.timer.read().ns - b.clients_request_ns[client_index];
         const request_duration_ms = @divTrunc(request_duration_ns, std.time.ns_per_ms);
         const transfers_created = @min(b.transfer_count, b.transfer_batch_count);
         b.transfers_created += transfers_created;
@@ -588,12 +585,12 @@ const Benchmark = struct {
             \\
         , .{
             .batch_count = b.request_index,
-            .batch_duration_s = @as(f64, @floatFromInt(b.timer.read())) / std.time.ns_per_s,
+            .batch_duration_s = @as(f64, @floatFromInt(b.timer.read().ns)) / std.time.ns_per_s,
             .batch_size = b.transfer_batch_count,
             .batch_delay = b.transfer_batch_delay,
             .transfer_rate = @divTrunc(
                 @as(u64, b.transfer_count) * std.time.ns_per_s,
-                b.timer.read(),
+                b.timer.read().ns,
             ),
         }) catch unreachable;
         print_percentiles_histogram(b.output, "batch", b.request_latency_histogram);
@@ -663,7 +660,7 @@ const Benchmark = struct {
 
         b.output.print("\n{[query_count]} queries in {[query_duration_s]d:.1} s\n", .{
             .query_count = b.request_index,
-            .query_duration_s = @as(f64, @floatFromInt(b.timer.read())) / std.time.ns_per_s,
+            .query_duration_s = @as(f64, @floatFromInt(b.timer.read().ns)) / std.time.ns_per_s,
         }) catch unreachable;
         print_percentiles_histogram(b.output, "query", b.request_latency_histogram);
 
@@ -860,7 +857,7 @@ const Benchmark = struct {
         assert(!b.clients_busy.is_set(client_index));
 
         b.clients_busy.set(client_index);
-        b.clients_request_ns[client_index] = b.timer.read();
+        b.clients_request_ns[client_index] = b.timer.read().ns;
         b.request_index += 1;
 
         var encoder = vsr.multi_batch.MultiBatchEncoder.init(
@@ -898,7 +895,7 @@ const Benchmark = struct {
 
         b.clients_busy.unset(client);
 
-        const duration_ns = b.timer.read() - b.clients_request_ns[client];
+        const duration_ns = b.timer.read().ns - b.clients_request_ns[client];
         const duration_ms = @divTrunc(duration_ns, std.time.ns_per_ms);
         b.request_latency_histogram[@min(duration_ms, b.request_latency_histogram.len - 1)] += 1;
 
@@ -1068,7 +1065,7 @@ const Benchmark = struct {
 };
 
 fn print_percentiles_histogram(
-    stdout: std.io.AnyWriter,
+    stdout: *std.Io.Writer,
     label: []const u8,
     histogram_buckets: []const u64,
 ) void {

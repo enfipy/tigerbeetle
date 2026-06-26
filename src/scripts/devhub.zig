@@ -241,9 +241,9 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
 
         var process = try shell.spawn(
             .{
-                .stdin_behavior = .Pipe,
-                .stdout_behavior = .Pipe,
-                .stderr_behavior = .Ignore,
+                .stdin_behavior = .pipe,
+                .stdout_behavior = .pipe,
+                .stderr_behavior = .ignore,
             },
             "./tigerbeetle start --addresses=0 --cache-grid=8GiB datafile-devhub",
             .{},
@@ -284,7 +284,7 @@ fn devhub_metrics(shell: *Shell, cli_args: CLIArgs) !void {
         // release_client_min, so expect the eviction.
         var eviction: Header.Eviction = undefined;
 
-        const peer = try std.net.Address.parseIp4("127.0.0.1", port);
+        const peer = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
         const stream = try std.net.tcpConnectToAddress(peer);
         defer stream.close();
 

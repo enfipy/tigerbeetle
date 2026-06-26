@@ -216,7 +216,10 @@ pub const Client = struct {
         } };
 
         self.fd = try self.io.open_socket_tcp(
-            options.host.ip.family(),
+            switch (options.host) {
+                .ip4 => std.posix.AF.INET,
+                .ip6 => std.posix.AF.INET6,
+            },
             .{
                 // Keeping the default value.
                 // Large buffers can cause latency issues.
@@ -821,13 +824,13 @@ pub const Client = struct {
         switch (client_method) {
             inline .connection_close, .channel_close => |close_reason, tag| {
                 const error_code: ErrorCodes = @enumFromInt(close_reason.reply_code);
-                if (std.meta.intToEnum(
+                if (std.enums.fromInt(
                     spec.ServerMethod.Tag,
                     @as(u32, @bitCast(protocol.MethodHeader{
                         .class = close_reason.class_id,
                         .method = close_reason.method_id,
                     })),
-                ) catch null) |server_method| {
+                )) |server_method| {
                     fatal(
                         "Operation cannot be completed: method={s} {s}={s}",
                         .{
@@ -1239,7 +1242,7 @@ const Confirms = struct {
 
     /// Confirms that the server has received and fsync'ed a batch of published messages.
     /// Returns `true` if there are no more messages pending acknowledgment.
-    fn confirm(self: *Confirms, ack: std.meta.TagPayload(spec.ClientMethod, .basic_ack)) bool {
+    fn confirm(self: *Confirms, ack: stdx.tag_payload(spec.ClientMethod, .basic_ack)) bool {
         assert(self.state == .waiting);
 
         const state = self.state.waiting;
@@ -1444,7 +1447,7 @@ test "amqp: spec" {
     // Sanity check to ensure the spec hasn't been manually modified.
     // Checking the hash to avoid downloading the XML from external sources during CI.
     try testing.expectEqual(
-        329829848237589433604725248571833881494,
+        76587151606185149542744646916040321978,
         vsr.checksum(@embedFile("amqp/spec.zig")),
     );
 }

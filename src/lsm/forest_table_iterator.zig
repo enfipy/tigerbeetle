@@ -25,11 +25,12 @@ const assert = std.debug.assert;
 
 const constants = @import("../constants.zig");
 const TableInfo = @import("./schema.zig").ManifestNode.TableInfo;
+const stdx = @import("stdx");
 
 pub fn ForestTableIteratorType(comptime Forest: type) type {
     // struct { (Tree.name) → TreeTableIteratorType(Tree) }
     const TreeTableIterators = iterator: {
-        const StructField = std.builtin.Type.StructField;
+        const StructField = stdx.Type.StructField;
 
         var fields: [Forest.tree_infos.len]StructField = undefined;
         for (Forest.tree_infos, 0..) |tree_info, i| {
@@ -42,14 +43,9 @@ pub fn ForestTableIteratorType(comptime Forest: type) type {
             };
         }
 
-        break :iterator @Type(.{ .@"struct" = .{
-            .layout = .auto,
-            .fields = &fields,
-            .decls = &.{},
-            .is_tuple = false,
-        } });
+        break :iterator stdx.StructFromFieldsType(&fields);
     };
-    assert(std.meta.fields(TreeTableIterators).len > 0);
+    assert(stdx.type_fields(TreeTableIterators).len > 0);
 
     return struct {
         const ForestTableIterator = @This();
@@ -61,7 +57,7 @@ pub fn ForestTableIteratorType(comptime Forest: type) type {
 
         trees: TreeTableIterators = default: {
             var iterators: TreeTableIterators = undefined;
-            for (std.meta.fields(TreeTableIterators)) |field| @field(iterators, field.name) = .{};
+            for (stdx.type_fields(TreeTableIterators)) |field| @field(iterators, field.name) = .{};
             break :default iterators;
         },
 

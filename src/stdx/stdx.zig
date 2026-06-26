@@ -37,11 +37,246 @@ const net = @import("./net.zig");
 pub const IPAddress = net.IPAddress;
 pub const SocketAddress = net.SocketAddress;
 
+pub const PosixAddress = std.Io.Threaded.PosixAddress;
+
+pub fn ip_address_family(address: std.Io.net.IpAddress) u32 {
+    return std.Io.Threaded.posixAddressFamily(&address);
+}
+
+pub fn ip_address_unspecified(address: std.Io.net.IpAddress) std.Io.net.IpAddress {
+    return switch (address) {
+        .ip4 => .{ .ip4 = .unspecified(0) },
+        .ip6 => .{ .ip6 = .unspecified(0) },
+    };
+}
+
+pub fn ip_address_to_sockaddr(
+    address: std.Io.net.IpAddress,
+) struct { PosixAddress, std.posix.socklen_t } {
+    var storage: PosixAddress = undefined;
+    const len = std.Io.Threaded.addressToPosix(&address, &storage);
+    return .{ storage, len };
+}
+
+pub fn sockaddr_to_ip_address(storage: *const PosixAddress) std.Io.net.IpAddress {
+    return switch (storage.any.family) {
+        std.posix.AF.INET, std.posix.AF.INET6 => std.Io.Threaded.addressFromPosix(storage),
+        else => unreachable,
+    };
+}
+
+pub fn connect_socket(socket: std.posix.socket_t, address: std.Io.net.IpAddress) !void {
+    const sockaddr, const sockaddr_len = ip_address_to_sockaddr(address);
+
+    if (comptime builtin.target.os.tag == .windows) {
+        return windows.connect_socket(socket, &sockaddr.any, sockaddr_len);
+    }
+
+    return switch (std.posix.errno(
+        std.posix.system.connect(socket, &sockaddr.any, sockaddr_len),
+    )) {
+        .SUCCESS => {},
+        .ACCES => error.AccessDenied,
+        .ADDRINUSE => error.AddressInUse,
+        .ADDRNOTAVAIL => error.AddressNotAvailable,
+        .AFNOSUPPORT => error.AddressFamilyNotSupported,
+        .ALREADY => error.ConnectionPending,
+        .BADF => error.FileDescriptorNotASocket,
+        .CONNREFUSED => error.ConnectionRefused,
+        .INPROGRESS => error.WouldBlock,
+        .INTR => error.Interrupted,
+        .ISCONN => error.AlreadyConnected,
+        .NETUNREACH => error.NetworkUnreachable,
+        .NOTSOCK => error.FileDescriptorNotASocket,
+        .PROTOTYPE => error.ProtocolNotSupported,
+        .TIMEDOUT => error.ConnectionTimedOut,
+        else => |err| unexpected_errno("connect", err),
+    };
+}
+
+pub fn close_fd(fd: std.posix.fd_t) void {
+    if (comptime builtin.target.os.tag == .windows) {
+        std.os.windows.CloseHandle(fd);
+        return;
+    }
+
+    switch (std.posix.errno(std.posix.system.close(fd))) {
+        .SUCCESS => {},
+        .BADF => unreachable,
+        .INTR => {},
+        else => {},
+    }
+}
+
 // Import these as `const GiB = stdx.GiB;`
 pub const KiB = 1 << 10;
 pub const MiB = 1 << 20;
 pub const GiB = 1 << 30;
 pub const TiB = 1 << 40;
+
+pub fn comptime_repeat(comptime pattern: []const u8, comptime count: usize) []const u8 {
+    return comptime blk: {
+        var output: [pattern.len * count]u8 = undefined;
+        for (0..count) |i| {
+            for (pattern, 0..) |byte, j| {
+                output[i * pattern.len + j] = byte;
+            }
+        }
+        const final = output;
+        break :blk &final;
+    };
+}
+
+pub const Type = struct {
+    pub const StructField = struct {
+        name: []const u8,
+        type: type,
+        default_value_ptr: ?*const anyopaque = null,
+        is_comptime: bool = false,
+        alignment: usize = 0,
+
+        pub fn defaultValue(comptime field: StructField) ?field.type {
+            const default_value_ptr = field.default_value_ptr orelse return null;
+            const dp: *const field.type = @ptrCast(@alignCast(default_value_ptr));
+            return dp.*;
+        }
+    };
+
+    pub const UnionField = struct {
+        name: []const u8,
+        type: type,
+        alignment: usize = 0,
+    };
+
+    pub const EnumField = struct {
+        name: []const u8,
+        value: comptime_int,
+    };
+};
+
+pub fn StructFromFieldsType(comptime fields: []const Type.StructField) type {
+    var field_names: [fields.len][]const u8 = undefined;
+    var field_types: [fields.len]type = undefined;
+    var field_attrs: [fields.len]std.builtin.Type.Struct.FieldAttributes = undefined;
+
+    for (fields, 0..) |field, i| {
+        field_names[i] = field.name;
+        field_types[i] = field.type;
+        field_attrs[i] = .{
+            .@"comptime" = field.is_comptime,
+            .@"align" = if (field.alignment == 0) null else field.alignment,
+            .default_value_ptr = field.default_value_ptr,
+        };
+    }
+
+    return @Struct(.auto, null, &field_names, &field_types, &field_attrs);
+}
+
+pub fn UnionFromFieldsType(
+    comptime tag_type: ?type,
+    comptime fields: []const Type.UnionField,
+) type {
+    var field_names: [fields.len][]const u8 = undefined;
+    var field_types: [fields.len]type = undefined;
+    var field_attrs: [fields.len]std.builtin.Type.Union.FieldAttributes = undefined;
+
+    for (fields, 0..) |field, i| {
+        field_names[i] = field.name;
+        field_types[i] = field.type;
+        field_attrs[i] = .{ .@"align" = if (field.alignment == 0) null else field.alignment };
+    }
+
+    return @Union(.auto, tag_type, &field_names, &field_types, &field_attrs);
+}
+
+pub fn EnumFromFieldsType(
+    comptime tag_type: type,
+    comptime fields: []const Type.EnumField,
+    comptime is_exhaustive: bool,
+) type {
+    var field_names: [fields.len][]const u8 = undefined;
+    var field_values: [fields.len]tag_type = undefined;
+
+    for (fields, 0..) |field, i| {
+        field_names[i] = field.name;
+        field_values[i] = @as(tag_type, @intCast(field.value));
+    }
+
+    return @Enum(
+        tag_type,
+        if (is_exhaustive) .exhaustive else .nonexhaustive,
+        &field_names,
+        &field_values,
+    );
+}
+
+pub fn name_cast(comptime E: type, comptime value: anytype) E {
+    const name = comptime switch (@typeInfo(@TypeOf(value))) {
+        .@"enum", .enum_literal => @tagName(value),
+        .pointer => value,
+        else => @compileError("unsupported name cast value"),
+    };
+    return @field(E, name);
+}
+
+pub fn tag_payload(comptime U: type, comptime tag: @typeInfo(U).@"union".tag_type.?) type {
+    inline for (type_fields(U)) |field| {
+        if (std.mem.eql(u8, field.name, @tagName(tag))) return field.type;
+    }
+    @compileError("tag not found");
+}
+
+pub fn type_fields(comptime T: type) switch (@typeInfo(T)) {
+    .@"struct" => |info| [info.field_names.len]Type.StructField,
+    .@"union" => |info| [info.field_names.len]Type.UnionField,
+    .@"enum" => |info| [info.field_names.len]Type.EnumField,
+    else => @compileError("unsupported type"),
+} {
+    return comptime switch (@typeInfo(T)) {
+        .@"struct" => |info| blk: {
+            var result: [info.field_names.len]Type.StructField = undefined;
+            for (
+                &result,
+                info.field_names,
+                info.field_types,
+                info.field_attrs,
+            ) |*field, name, FieldType, attrs| {
+                field.* = .{
+                    .name = name,
+                    .type = FieldType,
+                    .default_value_ptr = attrs.default_value_ptr,
+                    .is_comptime = attrs.@"comptime",
+                    .alignment = attrs.@"align" orelse 0,
+                };
+            }
+            break :blk result;
+        },
+        .@"union" => |info| blk: {
+            var result: [info.field_names.len]Type.UnionField = undefined;
+            for (
+                &result,
+                info.field_names,
+                info.field_types,
+                info.field_attrs,
+            ) |*field, name, FieldType, attrs| {
+                field.* = .{
+                    .name = name,
+                    .type = FieldType,
+                    .alignment = attrs.@"align" orelse 0,
+                };
+            }
+            break :blk result;
+        },
+        .@"enum" => |info| blk: {
+            var result: [info.field_names.len]Type.EnumField = undefined;
+            for (&result, info.field_names, info.field_values) |*field, name, value| {
+                field.* = .{ .name = name, .value = value };
+            }
+            break :blk result;
+        },
+        else => unreachable,
+    };
+}
 pub const PiB = 1 << 50;
 // pub const NiB = "Some people say my love cannot be true";
 
@@ -180,7 +415,11 @@ pub inline fn disjoint_slices(comptime A: type, comptime B: type, a: []const A, 
 }
 
 test "disjoint_slices" {
-    const a = try std.testing.allocator.alignedAlloc(u8, @sizeOf(u32), 8 * @sizeOf(u32));
+    const a = try std.testing.allocator.alignedAlloc(
+        u8,
+        .fromByteUnits(@sizeOf(u32)),
+        8 * @sizeOf(u32),
+    );
     defer std.testing.allocator.free(a);
 
     const b = try std.testing.allocator.alloc(u32, 8);
@@ -235,7 +474,7 @@ pub fn bytes_as_slice(
         else => unreachable,
     }
 
-    break :type if (type_info.pointer.is_const) []const T else []T;
+    break :type if (type_info.pointer.attrs.@"const") []const T else []T;
 } {
     switch (precision) {
         .exact => {
@@ -365,7 +604,7 @@ pub const log = if (builtin.is_test)
     // Downgrade `err` to `warn` for tests.
     // Zig fails any test that does `log.err`, but we want to test those code paths here.
     struct {
-        pub fn scoped(comptime scope: @Type(.enum_literal)) type {
+        pub fn scoped(comptime scope: @EnumLiteral()) type {
             const base = std.log.scoped(scope);
             return struct {
                 pub const err = warn;
@@ -381,7 +620,7 @@ else
 /// An alternative to the default logFn from `std.log`, which prepends a UTC timestamp.
 pub fn log_with_timestamp(
     comptime message_level: std.log.Level,
-    comptime scope: @Type(.enum_literal),
+    comptime scope: @EnumLiteral(),
     comptime format: []const u8,
     args: anytype,
 ) void {
@@ -389,14 +628,9 @@ pub fn log_with_timestamp(
     const scope_prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
     const instant_unix = InstantUnix.now();
 
-    const stderr = std.io.getStdErr().writer();
-    var buffered_writer = std.io.bufferedWriter(stderr);
-    const writer = buffered_writer.writer();
-
     nosuspend {
-        instant_unix.format("", .{}, writer) catch return;
-        writer.print(" " ++ level_text ++ scope_prefix ++ format ++ "\n", args) catch return;
-        buffered_writer.flush() catch return;
+        std.debug.print("{} " ++ level_text ++ scope_prefix, .{instant_unix});
+        std.debug.print(format ++ "\n", args);
     }
 }
 
@@ -449,8 +683,8 @@ fn has_pointers(comptime T: type) bool {
 
         .array => |info| return comptime has_pointers(info.child),
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                if (comptime has_pointers(field.type)) return true;
+            inline for (info.field_types) |FieldType| {
+                if (comptime has_pointers(FieldType)) return true;
             }
             return false;
         },
@@ -467,20 +701,20 @@ pub fn no_padding(comptime T: type) bool {
             switch (info.layout) {
                 .auto => return false,
                 .@"extern" => {
-                    for (info.fields) |field| {
-                        if (!no_padding(field.type)) return false;
+                    for (info.field_types) |FieldType| {
+                        if (!no_padding(FieldType)) return false;
                     }
 
                     // Check offsets of u128 and pseudo-u256 fields.
-                    for (info.fields) |field| {
-                        if (field.type == u128) {
-                            const offset = @offsetOf(T, field.name);
+                    for (info.field_names, info.field_types) |field_name, FieldType| {
+                        if (FieldType == u128) {
+                            const offset = @offsetOf(T, field_name);
                             if (offset % @sizeOf(u128) != 0) return false;
 
-                            if (@hasField(T, field.name ++ "_padding")) {
+                            if (@hasField(T, field_name ++ "_padding")) {
                                 if (offset % @sizeOf(u256) != 0) return false;
                                 if (offset + @sizeOf(u128) !=
-                                    @offsetOf(T, field.name ++ "_padding"))
+                                    @offsetOf(T, field_name ++ "_padding"))
                                 {
                                     return false;
                                 }
@@ -489,20 +723,17 @@ pub fn no_padding(comptime T: type) bool {
                     }
 
                     var offset = 0;
-                    for (info.fields) |field| {
-                        const field_offset = @offsetOf(T, field.name);
+                    for (info.field_names, info.field_types) |field_name, FieldType| {
+                        const field_offset = @offsetOf(T, field_name);
                         if (offset != field_offset) return false;
-                        offset += @sizeOf(field.type);
+                        offset += @sizeOf(FieldType);
                     }
                     return offset == @sizeOf(T);
                 },
                 .@"packed" => return @bitSizeOf(T) == 8 * @sizeOf(T),
             }
         },
-        .@"enum" => |info| {
-            maybe(info.is_exhaustive);
-            return no_padding(info.tag_type);
-        },
+        .@"enum" => |info| return no_padding(info.tag_type),
         .pointer => return false,
         .@"union" => return false,
         else => return false,
@@ -618,7 +849,7 @@ pub fn update(base: anytype, diff: anytype) @TypeOf(base) {
     assert(@typeInfo(@TypeOf(base)) == .@"struct");
 
     var updated = base;
-    inline for (std.meta.fields(@TypeOf(diff))) |f| {
+    inline for (type_fields(@TypeOf(diff))) |f| {
         @field(updated, f.name) = @field(diff, f.name);
     }
     return updated;
@@ -684,7 +915,7 @@ pub fn has_unique_representation(comptime T: type) bool {
 
             var sum_size = @as(usize, 0);
 
-            inline for (info.fields) |field| {
+            inline for (type_fields(T)) |field| {
                 const FieldType = field.type;
                 if (comptime !has_unique_representation(FieldType)) return false;
                 sum_size += @sizeOf(FieldType);
@@ -764,9 +995,14 @@ test "has_unique_representation" {
 
     try std.testing.expect(has_unique_representation(TestStruct10));
 
+    // Zig 0.17 requires all fields in a packed union to have the same bit width.
+    // Keep packed-union coverage by spelling the narrower logical field with explicit storage.
     const TestUnion1 = packed union {
         a: u32,
-        b: u16,
+        b: packed struct(u32) {
+            value: u16,
+            padding: u16,
+        },
     };
 
     try std.testing.expect(!has_unique_representation(TestUnion1));
@@ -792,7 +1028,7 @@ test "has_unique_representation" {
 
     try std.testing.expect(!has_unique_representation(TestUnion4));
 
-    inline for ([_]type{ i0, u8, i16, u32, i64 }) |T| {
+    inline for ([_]type{ u0, u8, i16, u32, i64 }) |T| {
         try std.testing.expect(has_unique_representation(T));
     }
     inline for ([_]type{ i1, u9, i17, u33, i24 }) |T| {
@@ -802,7 +1038,11 @@ test "has_unique_representation" {
     try std.testing.expect(!has_unique_representation([]u8));
     try std.testing.expect(!has_unique_representation([]const u8));
 
-    try std.testing.expect(has_unique_representation(@Vector(4, u16)));
+    if (@sizeOf(@Vector(4, u16)) == @sizeOf(u16) * 4) {
+        try std.testing.expect(has_unique_representation(@Vector(4, u16)));
+    } else {
+        try std.testing.expect(!has_unique_representation(@Vector(4, u16)));
+    }
 }
 
 /// Construct a `union(Enum)` type, where each union "value" type is defined in terms of the
@@ -819,7 +1059,7 @@ pub fn EnumUnionType(
     comptime Enum: type,
     comptime TypeForVariant: fn (comptime variant: Enum) type,
 ) type {
-    const UnionField = std.builtin.Type.UnionField;
+    const UnionField = Type.UnionField;
 
     var fields: [std.enums.values(Enum).len]UnionField = undefined;
     for (std.enums.values(Enum), 0..) |enum_variant, i| {
@@ -830,18 +1070,13 @@ pub fn EnumUnionType(
         };
     }
 
-    return @Type(.{ .@"union" = .{
-        .layout = .auto,
-        .fields = &fields,
-        .decls = &.{},
-        .tag_type = Enum,
-    } });
+    return UnionFromFieldsType(Enum, &fields);
 }
 
 /// Constructs an `enum` type from names.
 pub fn EnumType(comptime names: anytype) type {
     comptime assert(names.len > 0);
-    const EnumField = std.builtin.Type.EnumField;
+    const EnumField = Type.EnumField;
     var fields: [names.len]EnumField = undefined;
     for (names, 0..) |name, i| {
         fields[i] = .{
@@ -850,12 +1085,7 @@ pub fn EnumType(comptime names: anytype) type {
         };
     }
 
-    return @Type(.{ .@"enum" = .{
-        .fields = &fields,
-        .decls = &.{},
-        .tag_type = std.math.IntFittingRange(0, names.len),
-        .is_exhaustive = true,
-    } });
+    return EnumFromFieldsType(std.math.IntFittingRange(0, names.len), &fields, true);
 }
 
 /// Creates a slice to a comptime slice without triggering
@@ -867,20 +1097,59 @@ pub fn comptime_slice(comptime slice: anytype, comptime len: usize) []const @Typ
 /// Return a Formatter for a u64 value representing a file size.
 /// This formatter statically checks that the number is a multiple of 1024,
 /// and represents it using the IEC measurement units (KiB, MiB, GiB, ...).
-pub fn fmt_int_size_bin_exact(comptime value: u64) std.fmt.Formatter(format_int_size_bin_exact) {
+pub fn fmt_int_size_bin_exact(comptime value: u64) std.fmt.Alt(u64, format_int_size_bin_exact) {
     comptime assert(value < 1024 or value % 1024 == 0);
     return .{ .data = value };
 }
 
-fn format_int_size_bin_exact(
-    value: u64,
-    comptime fmt: []const u8,
-    options: std.fmt.FormatOptions,
-    writer: anytype,
-) !void {
-    _ = fmt;
+pub fn fmt_duration(ns: u64) std.fmt.Alt(u64, format_duration) {
+    return .{ .data = ns };
+}
+
+pub fn fmt_duration_signed(ns: i64) std.fmt.Alt(i64, format_duration_signed) {
+    return .{ .data = ns };
+}
+
+fn format_duration(ns: u64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    if (ns < std.time.ns_per_us) {
+        return writer.print("{}ns", .{ns});
+    } else if (ns < std.time.ns_per_ms) {
+        return format_duration_decimal(writer, ns, std.time.ns_per_us, "us");
+    } else if (ns < std.time.ns_per_s) {
+        return format_duration_decimal(writer, ns, std.time.ns_per_ms, "ms");
+    } else {
+        return format_duration_decimal(writer, ns, std.time.ns_per_s, "s");
+    }
+}
+
+fn format_duration_signed(ns: i64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    const magnitude: u64 = if (ns < 0) negative: {
+        try writer.writeByte('-');
+        break :negative @as(u64, @intCast(-(ns + 1))) + 1;
+    } else @intCast(ns);
+
+    return format_duration(magnitude, writer);
+}
+
+fn format_duration_decimal(
+    writer: *std.Io.Writer,
+    ns: u64,
+    unit: u64,
+    suffix: []const u8,
+) std.Io.Writer.Error!void {
+    const whole = ns / unit;
+    const fractional = (ns % unit) * 1000 / unit;
+
+    if (fractional == 0) {
+        return writer.print("{}{s}", .{ whole, suffix });
+    } else {
+        return writer.print("{}.{:0>3}{s}", .{ whole, fractional, suffix });
+    }
+}
+
+fn format_int_size_bin_exact(value: u64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
     if (value == 0) {
-        return std.fmt.formatBuf("0B", options, writer);
+        return writer.writeAll("0B");
     }
 
     // The worst case in terms of space needed is 20 bytes,
@@ -899,7 +1168,7 @@ fn format_int_size_bin_exact(
     const suffix = magnitudes_iec[magnitude];
 
     const length: usize = length: {
-        const i = std.fmt.formatIntBuf(&buf, value_unit, 10, .lower, .{});
+        const i = std.fmt.printInt(&buf, value_unit, 10, .lower, .{});
         if (magnitude == 0) {
             buf[i] = suffix;
             break :length i + 1;
@@ -909,17 +1178,17 @@ fn format_int_size_bin_exact(
         }
     };
 
-    return std.fmt.formatBuf(buf[0..length], options, writer);
+    return writer.writeAll(buf[0..length]);
 }
 
 test fmt_int_size_bin_exact {
-    try std.testing.expectFmt("0B", "{}", .{fmt_int_size_bin_exact(0)});
-    try std.testing.expectFmt("128B", "{}", .{fmt_int_size_bin_exact(128)});
-    try std.testing.expectFmt("8KiB", "{}", .{fmt_int_size_bin_exact(8 * 1024)});
-    try std.testing.expectFmt("1025KiB", "{}", .{fmt_int_size_bin_exact(1025 * 1024)});
-    try std.testing.expectFmt("12345KiB", "{}", .{fmt_int_size_bin_exact(12345 * 1024)});
-    try std.testing.expectFmt("42MiB", "{}", .{fmt_int_size_bin_exact(42 * 1024 * 1024)});
-    try std.testing.expectFmt("18014398509481983KiB", "{}", .{
+    try std.testing.expectFmt("0B", "{f}", .{fmt_int_size_bin_exact(0)});
+    try std.testing.expectFmt("128B", "{f}", .{fmt_int_size_bin_exact(128)});
+    try std.testing.expectFmt("8KiB", "{f}", .{fmt_int_size_bin_exact(8 * 1024)});
+    try std.testing.expectFmt("1025KiB", "{f}", .{fmt_int_size_bin_exact(1025 * 1024)});
+    try std.testing.expectFmt("12345KiB", "{f}", .{fmt_int_size_bin_exact(12345 * 1024)});
+    try std.testing.expectFmt("42MiB", "{f}", .{fmt_int_size_bin_exact(42 * 1024 * 1024)});
+    try std.testing.expectFmt("18014398509481983KiB", "{f}", .{
         fmt_int_size_bin_exact(std.math.maxInt(u64) - 1023),
     });
 }
@@ -1011,19 +1280,48 @@ pub fn unexpected_errno(label: []const u8, err: std.posix.system.E) std.posix.Un
     });
 
     if (builtin.mode == .Debug) {
-        std.debug.dumpCurrentStackTrace(null);
+        std.debug.dumpCurrentStackTrace(.{});
     }
     return error.Unexpected;
 }
 
 pub fn unique_u128() u128 {
-    const value = std.crypto.random.int(u128);
+    var value: u128 = undefined;
+    random_secure(std.mem.asBytes(&value));
 
     // Broken CSPRNG is the likeliest explanation for zero or all ones.
     assert(value != 0);
     assert(value != std.math.maxInt(u128));
 
     return value;
+}
+
+fn random_secure(buffer: []u8) void {
+    switch (builtin.os.tag) {
+        .linux => {
+            var index: usize = 0;
+            while (index < buffer.len) {
+                const slice = buffer[index..];
+                const rc = std.os.linux.getrandom(slice.ptr, slice.len, 0);
+                switch (std.posix.errno(rc)) {
+                    .SUCCESS => {
+                        const bytes_read: usize = @intCast(rc);
+                        assert(bytes_read > 0);
+                        index += bytes_read;
+                    },
+                    .INTR => continue,
+                    else => |err| std.debug.panic("getrandom failed: {}", .{err}),
+                }
+            }
+        },
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => {
+            std.c.arc4random_buf(buffer.ptr, buffer.len);
+        },
+        .windows => {
+            windows.random_bytes(buffer);
+        },
+        else => @compileError("unique_u128() needs secure randomness wiring for this OS"),
+    }
 }
 
 /// NB: intended for parsing CLI arguments where we care to preserve the user-specified unit.
@@ -1166,7 +1464,7 @@ test fastrange {
     }
     try snap(@src(),
         \\{ 1263, 1273, 1244, 1226, 1228, 1276, 1169, 1321 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 // This test shows that fastrange is not equivalent to modulo, but rather an alternative method.
@@ -1178,20 +1476,20 @@ test "fastrange not modulo" {
     }
     try snap(@src(),
         \\{ 10000, 0, 0, 0, 0, 0, 0, 0 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 /// `status` is a waitpid() status result.
 pub fn term_from_status(status: u32) std.process.Child.Term {
     const Term = std.process.Child.Term;
     return if (std.posix.W.IFEXITED(status))
-        Term{ .Exited = std.posix.W.EXITSTATUS(status) }
+        Term{ .exited = std.posix.W.EXITSTATUS(status) }
     else if (std.posix.W.IFSIGNALED(status))
-        Term{ .Signal = std.posix.W.TERMSIG(status) }
+        Term{ .signal = std.posix.W.TERMSIG(status) }
     else if (std.posix.W.IFSTOPPED(status))
-        Term{ .Stopped = std.posix.W.STOPSIG(status) }
+        Term{ .stopped = std.posix.W.STOPSIG(status) }
     else
-        Term{ .Unknown = status };
+        Term{ .unknown = status };
 }
 
 /// Converts a snake_case identifier to another identifier case at comptime.

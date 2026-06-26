@@ -12,9 +12,12 @@ const tb = vsr.tigerbeetle;
 pub const Parser = struct {
     input: []const u8,
     offset: u32 = 0,
-    stderr: std.io.AnyWriter,
+    stderr: *std.Io.Writer,
 
-    pub const ArgumentsList = std.ArrayListAlignedUnmanaged(u8, constants.cache_line_size);
+    pub const ArgumentsList = std.ArrayListAlignedUnmanaged(
+        u8,
+        .fromByteUnits(constants.cache_line_size),
+    );
     pub const Error = error{ParseError};
 
     pub const Command = enum {
@@ -53,14 +56,14 @@ pub const Parser = struct {
         arguments: *ArgumentsList,
     };
 
-    fn print_error(parser: *const Parser, comptime format: []const u8, arguments: anytype) !void {
+    fn print_error(parser: *Parser, comptime format: []const u8, arguments: anytype) !void {
         comptime assert(format.len > 0);
         comptime assert(format[format.len - 1] == '\n' or std.mem.eql(u8, format, " "));
 
         return parser.stderr.print(format, arguments);
     }
 
-    fn print_current_position(parser: *const Parser) !void {
+    fn print_current_position(parser: *Parser) !void {
         const target = target: {
             var position_cursor: usize = 0;
             var position_line: usize = 1;
@@ -171,7 +174,7 @@ pub const Parser = struct {
         comptime field: std.meta.FieldEnum(Object),
         value_string: []const u8,
     ) !void {
-        const Value = std.meta.FieldType(Object, field);
+        const Value = @FieldType(Object, @tagName(field));
 
         if (@hasField(Object, "flags") and field == .flags) {
             var flags_strings = std.mem.splitScalar(u8, value_string, '|');
@@ -179,7 +182,7 @@ pub const Parser = struct {
             while (flags_strings.next()) |flag_string| {
                 const flag_to_validate_trimmed =
                     std.mem.trim(u8, flag_string, std.ascii.whitespace[0..]);
-                inline for (@typeInfo(Value).@"struct".fields) |known_flag_field| {
+                inline for (stdx.type_fields(Value)) |known_flag_field| {
                     if (std.mem.eql(u8, known_flag_field.name, flag_to_validate_trimmed)) {
                         if (comptime !std.mem.eql(u8, known_flag_field.name, "padding")) {
                             const flag_value = &@field(validated_flags, known_flag_field.name);
@@ -252,7 +255,7 @@ pub const Parser = struct {
         var object = default;
 
         const ObjectField = std.meta.FieldEnum(@TypeOf(object));
-        var object_fields = std.enums.EnumSet(ObjectField).initEmpty();
+        var object_fields = std.enums.EnumSet(ObjectField).empty;
 
         while (parser.offset < parser.input.len) {
             const offset_start = parser.offset;
@@ -274,7 +277,7 @@ pub const Parser = struct {
 
                 // Reset object.
                 object = default;
-                object_fields = .initEmpty();
+                object_fields = .empty;
             }
 
             const field_string = parser.parse_identifier();
@@ -361,7 +364,7 @@ pub const Parser = struct {
     // TODO(zig): Replace the (implicit) anyerror with a concrete (std.io.Writer.Error || Error).
     pub fn parse_statement(
         input: []const u8,
-        stderr: std.io.AnyWriter,
+        stderr: *std.Io.Writer,
         arguments: *ArgumentsList,
     ) !Statement {
         var parser = Parser{ .input = input, .stderr = stderr };
@@ -483,7 +486,7 @@ test "Parser: fuzz" {
         break :fields fields;
     };
 
-    var stderr = std.ArrayListUnmanaged(u8){};
+    var stderr = std.ArrayListUnmanaged(u8).empty;
     defer stderr.deinit(std.testing.allocator);
 
     var input = try std.ArrayListUnmanaged(u8).initCapacity(std.testing.allocator, input_size_max);
@@ -518,10 +521,10 @@ test "Parser: fuzz" {
                 (@as(u256, 1) << value_power) - @intFromBool(prng.boolean());
 
             _ = switch (prng.enum_uniform(enum { hex, dec, oct, bin })) {
-                .dec => input.writer(std.testing.allocator).print("{d}", .{value}),
-                .hex => input.writer(std.testing.allocator).print("0x{x}", .{value}),
-                .oct => input.writer(std.testing.allocator).print("0o{o}", .{value}),
-                .bin => input.writer(std.testing.allocator).print("0b{b}", .{value}),
+                .dec => input.print(std.testing.allocator, "{d}", .{value}),
+                .hex => input.print(std.testing.allocator, "0x{x}", .{value}),
+                .oct => input.print(std.testing.allocator, "0o{o}", .{value}),
+                .bin => input.print(std.testing.allocator, "0b{b}", .{value}),
             } catch unreachable;
 
             input.appendAssumeCapacity(' ');
@@ -533,8 +536,8 @@ test "Parser: fuzz" {
             input.items[prng.index(input.items)] = alphabet[prng.index(alphabet)];
         }
 
-        const stderr_writer = stderr.writer(std.testing.allocator);
-        _ = Parser.parse_statement(input.items, stderr_writer.any(), &body) catch {
+        var stderr_writer: std.Io.Writer.Discarding = .init(&.{});
+        _ = Parser.parse_statement(input.items, &stderr_writer.writer, &body) catch {
             error_count += 1;
         };
     }
@@ -561,9 +564,11 @@ test "Parser: snap" {
 
             try t.body.ensureTotalCapacity(std.testing.allocator, constants.message_size_max);
 
-            const stderr_writer = t.stderr.writer(std.testing.allocator);
-            const statement = Parser.parse_statement(string, stderr_writer.any(), &t.body) catch {
-                try want.diff(t.stderr.items);
+            var stderr_writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
+            defer stderr_writer.deinit();
+
+            const statement = Parser.parse_statement(string, &stderr_writer.writer, &t.body) catch {
+                try want.diff(stderr_writer.written());
                 return;
             };
 
@@ -586,36 +591,49 @@ test "Parser: snap" {
             comptime operation: StateMachine.Operation,
             objects: []const ObjectType(operation),
         ) !void {
-            const body_formatted_writer = t.body_formatted.writer(std.testing.allocator);
-            try body_formatted_writer.print("{s}", .{@tagName(operation)});
+            try t.body_formatted.print(std.testing.allocator, "{s}", .{@tagName(operation)});
             if (objects.len > 1) try t.body_formatted.append(std.testing.allocator, '\n');
 
             const Object = ObjectType(operation);
             for (objects, 0..) |*object, i| {
                 if (i > 0) try t.body_formatted.append(std.testing.allocator, '\n');
-                inline for (std.meta.fields(Object)) |field| {
+                inline for (stdx.type_fields(Object)) |field| {
                     const value = @field(object, field.name);
 
                     if (stdx.zeroed(std.mem.asBytes(&value))) {
                         // Omit zeroed fields for readability.
                     } else {
                         if (comptime std.mem.eql(u8, field.name, "flags")) {
-                            try body_formatted_writer.print(" flags=", .{});
+                            try t.body_formatted.print(std.testing.allocator, " flags=", .{});
                             var separate = false;
-                            inline for (std.meta.fields(field.type)) |flag| {
+                            inline for (stdx.type_fields(field.type)) |flag| {
                                 const flag_value = @field(value, flag.name);
                                 if (comptime std.mem.eql(u8, flag.name, "padding")) {
                                     assert(flag_value == 0);
                                 } else {
                                     if (flag_value) {
-                                        if (separate) try body_formatted_writer.print("|", .{});
+                                        if (separate) {
+                                            try t.body_formatted.print(
+                                                std.testing.allocator,
+                                                "|",
+                                                .{},
+                                            );
+                                        }
                                         separate = true;
-                                        try body_formatted_writer.print("{s}", .{flag.name});
+                                        try t.body_formatted.print(
+                                            std.testing.allocator,
+                                            "{s}",
+                                            .{flag.name},
+                                        );
                                     }
                                 }
                             }
                         } else {
-                            try body_formatted_writer.print(" {s}={any}", .{ field.name, value });
+                            try t.body_formatted.print(
+                                std.testing.allocator,
+                                " {s}={any}",
+                                .{ field.name, value },
+                            );
                         }
                     }
                 }
@@ -623,7 +641,7 @@ test "Parser: snap" {
         }
     };
 
-    var t = T{ .body = .{}, .body_formatted = .{}, .stderr = .{} };
+    var t = T{ .body = .empty, .body_formatted = .empty, .stderr = .empty };
     defer t.stderr.deinit(std.testing.allocator);
     defer t.body_formatted.deinit(std.testing.allocator);
     defer t.body.deinit(std.testing.allocator);

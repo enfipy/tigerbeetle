@@ -31,10 +31,10 @@ pub const IO = struct {
         _ = entries;
         _ = flags;
 
-        _ = try os.windows.WSAStartup(2, 2);
-        errdefer os.windows.WSACleanup() catch unreachable;
+        try stdx.windows.wsa_startup();
+        errdefer stdx.windows.wsa_cleanup() catch unreachable;
 
-        const iocp = try os.windows.CreateIoCompletionPort(
+        const iocp = try stdx.windows.create_io_completion_port(
             os.windows.INVALID_HANDLE_VALUE,
             null,
             0,
@@ -48,7 +48,7 @@ pub const IO = struct {
         os.windows.CloseHandle(self.iocp);
         self.iocp = os.windows.INVALID_HANDLE_VALUE;
 
-        os.windows.WSACleanup() catch unreachable;
+        stdx.windows.wsa_cleanup() catch unreachable;
     }
 
     pub fn run(self: *IO) !void {
@@ -112,7 +112,7 @@ pub const IO = struct {
             const expires = std.math.cast(os.windows.DWORD, expires_ms) orelse
                 std.math.maxInt(os.windows.DWORD);
             // Max DWORD is reserved for INFINITE so cap the cast at max - 1.
-            timeout_ms = if (expires == os.windows.INFINITE) expires - 1 else expires;
+            timeout_ms = if (expires == stdx.windows.INFINITE) expires - 1 else expires;
         }
 
         // Wait for IOCP completions when there's IO pending or when we need
@@ -127,8 +127,8 @@ pub const IO = struct {
                 .non_blocking => 0,
             };
 
-            var events: [64]os.windows.OVERLAPPED_ENTRY = undefined;
-            const num_events: u32 = os.windows.GetQueuedCompletionStatusEx(
+            var events: [64]stdx.windows.OVERLAPPED_ENTRY = undefined;
+            const num_events: u32 = stdx.windows.get_queued_completion_status_ex(
                 self.iocp,
                 &events,
                 io_timeout,
@@ -216,13 +216,13 @@ pub const IO = struct {
         };
 
         const Overlapped = struct {
-            raw: os.windows.OVERLAPPED,
+            raw: stdx.windows.OVERLAPPED,
             completion: *Completion,
         };
 
         const Transfer = struct {
             socket: socket_t,
-            buf: os.windows.ws2_32.WSABUF,
+            buf: stdx.windows.WSABUF,
             overlapped: Overlapped,
             pending: bool,
         };
@@ -232,11 +232,11 @@ pub const IO = struct {
                 overlapped: Overlapped,
                 listen_socket: socket_t,
                 client_socket: ?socket_t,
-                addr_buffer: [(@sizeOf(std.net.Address) + 16) * 2]u8 align(4),
+                addr_buffer: [(@sizeOf(std.Io.net.IpAddress) + 16) * 2]u8 align(4),
             },
             connect: struct {
                 socket: socket_t,
-                address: std.net.Address,
+                address: std.Io.net.IpAddress,
                 overlapped: Overlapped,
                 pending: bool,
             },
@@ -280,7 +280,7 @@ pub const IO = struct {
         comptime callback: anytype,
         completion: *Completion,
         comptime op_tag: std.meta.Tag(Completion.Operation),
-        op_data: std.meta.TagPayload(Completion.Operation, op_tag),
+        op_data: stdx.tag_payload(Completion.Operation, op_tag),
         comptime OperationImpl: type,
     ) void {
         const Callback = struct {
@@ -327,7 +327,13 @@ pub const IO = struct {
         }
     }
 
-    pub const AcceptError = posix.AcceptError || posix.SetSockOptError;
+    pub const AcceptError = error{
+        WouldBlock,
+        FileDescriptorNotASocket,
+        OperationNotSupported,
+        ConnectionAborted,
+        SystemResources,
+    } || posix.UnexpectedError;
 
     pub fn accept(
         self: *IO,
@@ -363,68 +369,53 @@ pub const IO = struct {
                     const rc = if (op.client_socket == null) blk: {
                         // When first called, the client_socket is invalid so we start the op.
                         // Create the socket that will be used for accept.
-                        op.client_socket = ctx.io.open_socket(
+                        op.client_socket = try ctx.io.open_socket(
                             posix.AF.INET,
                             posix.SOCK.STREAM,
                             posix.IPPROTO.TCP,
-                        ) catch |err| switch (err) {
-                            error.AddressFamilyNotSupported => unreachable,
-                            error.ProtocolNotSupported => unreachable,
-                            else => |e| return e,
-                        };
+                        );
 
                         var sync_bytes_read: os.windows.DWORD = undefined;
                         op.overlapped = .{
-                            .raw = std.mem.zeroes(os.windows.OVERLAPPED),
+                            .raw = std.mem.zeroes(stdx.windows.OVERLAPPED),
                             .completion = ctx.completion,
                         };
 
                         // Start the asynchronous accept with the created socket.
-                        break :blk os.windows.ws2_32.AcceptEx(
+                        break :blk stdx.windows.accept_ex(
                             op.listen_socket,
                             op.client_socket.?,
                             &op.addr_buffer,
                             0,
-                            @sizeOf(std.net.Address) + 16,
-                            @sizeOf(std.net.Address) + 16,
+                            @sizeOf(std.Io.net.IpAddress) + 16,
+                            @sizeOf(std.Io.net.IpAddress) + 16,
                             &sync_bytes_read,
                             &op.overlapped.raw,
                         );
                     } else blk: {
                         // Called after accept was started, so get the result.
-                        break :blk os.windows.ws2_32.WSAGetOverlappedResult(
+                        break :blk stdx.windows.wsa_get_overlapped_result_raw(
                             op.listen_socket,
                             &op.overlapped.raw,
                             &transferred,
-                            os.windows.FALSE, // Don't wait.
+                            stdx.windows.FALSE, // Don't wait.
                             &flags,
                         );
                     };
 
                     // Return the socket if we succeed in accepting.
-                    if (rc != os.windows.FALSE) {
+                    if (rc != stdx.windows.FALSE) {
                         // Enables getsockopt, setsockopt, getsockname, getpeername.
-                        _ = os.windows.ws2_32.setsockopt(
+                        stdx.windows.setsockopt_null(
                             op.client_socket.?,
-                            os.windows.ws2_32.SOL.SOCKET,
-                            os.windows.ws2_32.SO.UPDATE_ACCEPT_CONTEXT,
-                            null,
-                            0,
-                        );
+                            stdx.windows.SOL_SOCKET,
+                            stdx.windows.SO_UPDATE_ACCEPT_CONTEXT,
+                        ) catch unreachable;
 
                         return op.client_socket.?;
                     }
 
-                    // Destroy the client_socket we created if we get a non WouldBlock error.
-                    errdefer |err| switch (err) {
-                        error.WouldBlock => {},
-                        else => {
-                            ctx.io.close_socket(op.client_socket.?);
-                            op.client_socket = null;
-                        },
-                    };
-
-                    return switch (os.windows.ws2_32.WSAGetLastError()) {
+                    const accept_error = switch (stdx.windows.wsa_get_last_error()) {
                         .WSA_IO_PENDING, .WSAEWOULDBLOCK, .WSA_IO_INCOMPLETE => error.WouldBlock,
                         .WSANOTINITIALISED => unreachable, // WSAStartup() was called.
                         .WSAENETDOWN => unreachable, // WinSock error.
@@ -436,8 +427,18 @@ pub const IO = struct {
                         .WSAEMFILE => unreachable, // We create our own descriptor so its available.
                         .WSAENOBUFS => error.SystemResources,
                         .WSAEINTR, .WSAEINPROGRESS => unreachable, // No blocking calls.
-                        else => |err| os.windows.unexpectedWSAError(err),
+                        else => |err| stdx.windows.unexpected_wsa_error(err),
                     };
+
+                    switch (accept_error) {
+                        error.WouldBlock => {},
+                        else => {
+                            ctx.io.close_socket(op.client_socket.?);
+                            op.client_socket = null;
+                        },
+                    }
+
+                    return accept_error;
                 }
             },
         );
@@ -450,7 +451,23 @@ pub const IO = struct {
         NoSpaceLeft,
     } || posix.UnexpectedError;
 
-    pub const ConnectError = posix.ConnectError || error{FileDescriptorNotASocket};
+    pub const ConnectError = error{
+        WouldBlock,
+        PermissionDenied,
+        AddressInUse,
+        AddressNotAvailable,
+        AddressFamilyNotSupported,
+        ConnectionPending,
+        ConnectionRefused,
+        ConnectionResetByPeer,
+        NetworkUnreachable,
+        ConnectionTimedOut,
+        SystemResources,
+        FileDescriptorNotASocket,
+        NetworkDown,
+        NetworkSubsystemFailed,
+        ProtocolNotSupported,
+    } || posix.UnexpectedError;
 
     pub fn connect(
         self: *IO,
@@ -463,7 +480,7 @@ pub const IO = struct {
         ) void,
         completion: *Completion,
         socket: socket_t,
-        address: stdx.SocketAddress,
+        address: std.Io.net.IpAddress,
     ) void {
         self.submit(
             context,
@@ -472,7 +489,7 @@ pub const IO = struct {
             .connect,
             .{
                 .socket = socket,
-                .address = address.to_std(),
+                .address = address,
                 .overlapped = undefined,
                 .pending = false,
             },
@@ -484,53 +501,49 @@ pub const IO = struct {
                     const rc = blk: {
                         // Poll for the result if we've already started the connect op.
                         if (op.pending) {
-                            break :blk os.windows.ws2_32.WSAGetOverlappedResult(
+                            break :blk stdx.windows.wsa_get_overlapped_result_raw(
                                 op.socket,
                                 &op.overlapped.raw,
                                 &transferred,
-                                os.windows.FALSE, // Don't wait.
+                                stdx.windows.FALSE, // Don't wait.
                                 &flags,
                             );
                         }
 
                         // ConnectEx requires the socket to be initially bound (INADDR_ANY).
-                        const inaddr_any: [4]u8 = @splat(0);
-                        const bind_addr = std.net.Address.initIp4(inaddr_any, 0);
-                        posix.bind(
+                        const bind_addr, const bind_addr_len =
+                            stdx.ip_address_to_sockaddr(stdx.ip_address_unspecified(op.address));
+                        stdx.windows.bind_socket(
                             op.socket,
                             &bind_addr.any,
-                            bind_addr.getOsSockLen(),
+                            bind_addr_len,
                         ) catch |err| switch (err) {
                             error.AccessDenied => unreachable,
-                            error.SymLinkLoop => unreachable,
-                            error.NameTooLong => unreachable,
-                            error.NotDir => unreachable,
-                            error.ReadOnlyFileSystem => unreachable,
                             error.NetworkSubsystemFailed => unreachable,
-                            error.AlreadyBound => unreachable,
+                            error.AddressInUse => unreachable,
                             else => |e| return e,
                         };
 
                         const LPFN_CONNECTEX = *const fn (
-                            Socket: os.windows.ws2_32.SOCKET,
+                            Socket: os.windows.HANDLE,
                             SockAddr: *const os.windows.ws2_32.sockaddr,
                             SockLen: posix.socklen_t,
                             SendBuf: ?*const anyopaque,
                             SendBufLen: os.windows.DWORD,
                             BytesSent: *os.windows.DWORD,
-                            Overlapped: *os.windows.OVERLAPPED,
-                        ) callconv(os.windows.WINAPI) os.windows.BOOL;
+                            Overlapped: *stdx.windows.OVERLAPPED,
+                        ) callconv(.winapi) os.windows.BOOL;
 
                         // Find the ConnectEx function by dynamically looking it up on the socket.
                         // TODO: use `os.windows.loadWinsockExtensionFunction` once the function
                         // pointer is no longer required to be comptime.
                         var connect_ex: LPFN_CONNECTEX = undefined;
                         var num_bytes: os.windows.DWORD = undefined;
-                        const guid = os.windows.ws2_32.WSAID_CONNECTEX;
-                        const socket_error = os.windows.ws2_32.SOCKET_ERROR;
-                        switch (os.windows.ws2_32.WSAIoctl(
+                        var guid = stdx.windows.WSAID_CONNECTEX;
+                        const socket_error = stdx.windows.SOCKET_ERROR;
+                        switch (stdx.windows.wsa_ioctl_raw(
                             op.socket,
-                            os.windows.ws2_32.SIO_GET_EXTENSION_FUNCTION_POINTER,
+                            stdx.windows.SIO_GET_EXTENSION_FUNCTION_POINTER,
                             @ptrCast(&guid),
                             @sizeOf(os.windows.GUID),
                             @ptrCast(&connect_ex),
@@ -539,25 +552,28 @@ pub const IO = struct {
                             null,
                             null,
                         )) {
-                            socket_error => switch (os.windows.ws2_32.WSAGetLastError()) {
+                            socket_error => switch (stdx.windows.wsa_get_last_error()) {
                                 .WSAEOPNOTSUPP => unreachable,
                                 .WSAENOTSOCK => unreachable,
-                                else => |err| return os.windows.unexpectedWSAError(err),
+                                else => |err| return stdx.windows.unexpected_wsa_error(err),
                             },
                             else => assert(num_bytes == @sizeOf(LPFN_CONNECTEX)),
                         }
 
                         op.pending = true;
                         op.overlapped = .{
-                            .raw = std.mem.zeroes(os.windows.OVERLAPPED),
+                            .raw = std.mem.zeroes(stdx.windows.OVERLAPPED),
                             .completion = ctx.completion,
                         };
+
+                        const sockaddr, const sockaddr_len =
+                            stdx.ip_address_to_sockaddr(op.address);
 
                         // Start the connect operation.
                         break :blk (connect_ex)(
                             op.socket,
-                            &op.address.any,
-                            op.address.getOsSockLen(),
+                            &sockaddr.any,
+                            sockaddr_len,
                             null,
                             0,
                             &transferred,
@@ -566,20 +582,18 @@ pub const IO = struct {
                     };
 
                     // Return if we succeeded in connecting.
-                    if (rc != os.windows.FALSE) {
+                    if (rc != stdx.windows.FALSE) {
                         // Enables getsockopt, setsockopt, getsockname, getpeername.
-                        _ = os.windows.ws2_32.setsockopt(
+                        stdx.windows.setsockopt_null(
                             op.socket,
-                            os.windows.ws2_32.SOL.SOCKET,
-                            os.windows.ws2_32.SO.UPDATE_CONNECT_CONTEXT,
-                            null,
-                            0,
-                        );
+                            stdx.windows.SOL_SOCKET,
+                            stdx.windows.SO_UPDATE_CONNECT_CONTEXT,
+                        ) catch unreachable;
 
                         return;
                     }
 
-                    return switch (os.windows.ws2_32.WSAGetLastError()) {
+                    return switch (stdx.windows.wsa_get_last_error()) {
                         .WSA_IO_PENDING, .WSAEWOULDBLOCK, .WSA_IO_INCOMPLETE => error.WouldBlock,
                         .WSAEALREADY => error.WouldBlock,
                         .WSANOTINITIALISED => unreachable, // WSAStartup() was called.
@@ -594,7 +608,7 @@ pub const IO = struct {
                         .WSAENOTSOCK => unreachable, // Socket is not bound or is listening.
                         .WSAETIMEDOUT => error.ConnectionTimedOut,
                         .WSA_INVALID_HANDLE => unreachable, // We don't use hEvent in OVERLAPPED.
-                        else => |err| os.windows.unexpectedWSAError(err),
+                        else => |err| stdx.windows.unexpected_wsa_error(err),
                     };
                 }
             },
@@ -626,13 +640,21 @@ pub const IO = struct {
             struct {
                 fn do_operation(ctx: Completion.Context, op: anytype) FsyncError!void {
                     _ = ctx;
-                    return posix.fsync(op.fd);
+                    return stdx.windows.flush_file_buffers(op.fd);
                 }
             },
         );
     }
 
-    pub const SendError = posix.SendError;
+    pub const SendError = error{
+        WouldBlock,
+        ConnectionResetByPeer,
+        MessageTooBig,
+        NetworkSubsystemFailed,
+        SystemResources,
+        FileDescriptorNotASocket,
+        BrokenPipe,
+    } || posix.UnexpectedError;
 
     pub fn send(
         self: *IO,
@@ -649,7 +671,7 @@ pub const IO = struct {
     ) void {
         const transfer = Completion.Transfer{
             .socket = socket,
-            .buf = os.windows.ws2_32.WSABUF{
+            .buf = stdx.windows.WSABUF{
                 .len = @intCast(buffer_limit(buffer.len)),
                 .buf = @constCast(buffer.ptr),
             },
@@ -671,23 +693,23 @@ pub const IO = struct {
                     const rc = blk: {
                         // Poll for the result if we've already started the send op.
                         if (op.pending) {
-                            break :blk os.windows.ws2_32.WSAGetOverlappedResult(
+                            break :blk stdx.windows.wsa_get_overlapped_result_raw(
                                 op.socket,
                                 &op.overlapped.raw,
                                 &transferred,
-                                os.windows.FALSE, // Don't wait.
+                                stdx.windows.FALSE, // Don't wait.
                                 &flags,
                             );
                         }
 
                         op.pending = true;
                         op.overlapped = .{
-                            .raw = std.mem.zeroes(os.windows.OVERLAPPED),
+                            .raw = std.mem.zeroes(stdx.windows.OVERLAPPED),
                             .completion = ctx.completion,
                         };
 
                         // Start the send operation.
-                        break :blk switch (os.windows.ws2_32.WSASend(
+                        break :blk switch (stdx.windows.wsa_send_raw(
                             op.socket,
                             @ptrCast(&op.buf),
                             1, // One buffer.
@@ -696,20 +718,20 @@ pub const IO = struct {
                             &op.overlapped.raw,
                             null,
                         )) {
-                            os.windows.ws2_32.SOCKET_ERROR => @as(
+                            stdx.windows.SOCKET_ERROR => @as(
                                 os.windows.BOOL,
-                                os.windows.FALSE,
+                                os.windows.BOOL.fromBool(false),
                             ),
-                            0 => os.windows.TRUE,
+                            0 => stdx.windows.TRUE,
                             else => unreachable,
                         };
                     };
 
                     // Return bytes transferred on success.
-                    if (rc != os.windows.FALSE)
+                    if (rc != stdx.windows.FALSE)
                         return transferred;
 
-                    return switch (os.windows.ws2_32.WSAGetLastError()) {
+                    return switch (stdx.windows.wsa_get_last_error()) {
                         .WSA_IO_PENDING, .WSAEWOULDBLOCK, .WSA_IO_INCOMPLETE => error.WouldBlock,
                         .WSANOTINITIALISED => unreachable, // WSAStartup() was called
                         .WSA_INVALID_HANDLE => unreachable, // We don't use OVERLAPPED.hEvent
@@ -728,7 +750,7 @@ pub const IO = struct {
                         .WSAEOPNOTSUPP => unreachable, // We don't use MSG_OOB or MSG_PARTIAL.
                         .WSAESHUTDOWN => error.BrokenPipe,
                         .WSA_OPERATION_ABORTED => unreachable, // Operation was cancelled.
-                        else => |err| os.windows.unexpectedWSAError(err),
+                        else => |err| stdx.windows.unexpected_wsa_error(err),
                     };
                 }
             },
@@ -739,7 +761,14 @@ pub const IO = struct {
         return null; // No support for best-effort non-blocking synchronous send.
     }
 
-    pub const RecvError = posix.RecvFromError;
+    pub const RecvError = error{
+        WouldBlock,
+        ConnectionRefused,
+        ConnectionResetByPeer,
+        MessageTooBig,
+        NetworkSubsystemFailed,
+        SocketNotConnected,
+    } || posix.UnexpectedError;
 
     pub fn recv(
         self: *IO,
@@ -756,7 +785,7 @@ pub const IO = struct {
     ) void {
         const transfer = Completion.Transfer{
             .socket = socket,
-            .buf = os.windows.ws2_32.WSABUF{
+            .buf = stdx.windows.WSABUF{
                 .len = @intCast(buffer_limit(buffer.len)),
                 .buf = buffer.ptr,
             },
@@ -778,23 +807,23 @@ pub const IO = struct {
                     const rc = blk: {
                         // Poll for the result if we've already started the recv op.
                         if (op.pending) {
-                            break :blk os.windows.ws2_32.WSAGetOverlappedResult(
+                            break :blk stdx.windows.wsa_get_overlapped_result_raw(
                                 op.socket,
                                 &op.overlapped.raw,
                                 &transferred,
-                                os.windows.FALSE, // Don't wait.
+                                stdx.windows.FALSE, // Don't wait.
                                 &flags,
                             );
                         }
 
                         op.pending = true;
                         op.overlapped = .{
-                            .raw = std.mem.zeroes(os.windows.OVERLAPPED),
+                            .raw = std.mem.zeroes(stdx.windows.OVERLAPPED),
                             .completion = ctx.completion,
                         };
 
                         // Start the recv operation.
-                        break :blk switch (os.windows.ws2_32.WSARecv(
+                        break :blk switch (stdx.windows.wsa_recv_raw(
                             op.socket,
                             @ptrCast(&op.buf),
                             1, // one buffer
@@ -803,20 +832,20 @@ pub const IO = struct {
                             &op.overlapped.raw,
                             null,
                         )) {
-                            os.windows.ws2_32.SOCKET_ERROR => @as(
+                            stdx.windows.SOCKET_ERROR => @as(
                                 os.windows.BOOL,
-                                os.windows.FALSE,
+                                os.windows.BOOL.fromBool(false),
                             ),
-                            0 => os.windows.TRUE,
+                            0 => stdx.windows.TRUE,
                             else => unreachable,
                         };
                     };
 
                     // Return bytes received on success.
-                    if (rc != os.windows.FALSE)
+                    if (rc != stdx.windows.FALSE)
                         return transferred;
 
-                    return switch (os.windows.ws2_32.WSAGetLastError()) {
+                    return switch (stdx.windows.wsa_get_last_error()) {
                         .WSA_IO_PENDING, .WSAEWOULDBLOCK, .WSA_IO_INCOMPLETE => error.WouldBlock,
                         .WSANOTINITIALISED => unreachable, // WSAStartup() was called
                         .WSA_INVALID_HANDLE => unreachable, // We don't use OVERLAPPED.hEvent.
@@ -836,7 +865,7 @@ pub const IO = struct {
                         .WSAESHUTDOWN => error.SocketNotConnected,
                         .WSAETIMEDOUT => error.ConnectionRefused,
                         .WSA_OPERATION_ABORTED => unreachable, // Operation was cancelled.
-                        else => |err| os.windows.unexpectedWSAError(err),
+                        else => |err| stdx.windows.unexpected_wsa_error(err),
                     };
                 }
             },
@@ -849,11 +878,11 @@ pub const IO = struct {
         var transferred: os.windows.DWORD = undefined;
         const rc = blk: {
             // Poll result if already started.
-            if (op.pending) break :blk os.windows.kernel32.GetOverlappedResult(
+            if (op.pending) break :blk stdx.windows.get_overlapped_result_raw(
                 op.fd,
                 &op.overlapped.raw,
                 &transferred,
-                os.windows.FALSE, // Don't wait here.
+                os.windows.BOOL.fromBool(false), // Don't wait here.
             );
 
             // Start the operation.
@@ -876,11 +905,11 @@ pub const IO = struct {
         };
 
         // Operation completed successfully.
-        if (rc != os.windows.FALSE) {
+        if (rc != os.windows.BOOL.fromBool(false)) {
             return transferred;
         }
 
-        return switch (os.windows.kernel32.GetLastError()) {
+        return switch (os.windows.GetLastError()) {
             .IO_PENDING => error.WouldBlock,
             .INVALID_USER_BUFFER, .NOT_ENOUGH_MEMORY => error.SystemResources,
             .NOT_ENOUGH_QUOTA => error.SystemResources,
@@ -933,13 +962,26 @@ pub const IO = struct {
             },
             struct {
                 fn do_operation(ctx: Completion.Context, op: anytype) ReadError!usize {
-                    return do_file_io(ctx, op, os.windows.kernel32.ReadFile);
+                    return do_file_io(ctx, op, stdx.windows.read_file_raw);
                 }
             },
         );
     }
 
-    pub const WriteError = posix.PWriteError;
+    pub const WriteError = error{
+        WouldBlock,
+        NotOpenForWriting,
+        NotConnected,
+        DiskQuota,
+        FileTooBig,
+        Alignment,
+        InputOutput,
+        NoSpaceLeft,
+        Unseekable,
+        AccessDenied,
+        BrokenPipe,
+        SystemResources,
+    } || posix.UnexpectedError;
 
     pub fn write(
         self: *IO,
@@ -970,7 +1012,7 @@ pub const IO = struct {
             },
             struct {
                 fn do_operation(ctx: Completion.Context, op: anytype) WriteError!usize {
-                    return do_file_io(ctx, op, os.windows.kernel32.WriteFile);
+                    return do_file_io(ctx, op, stdx.windows.write_file_raw);
                 }
             },
         );
@@ -1110,7 +1152,7 @@ pub const IO = struct {
             .context = null,
             .operation = .{
                 .event = .{
-                    .raw = std.mem.zeroes(os.windows.OVERLAPPED),
+                    .raw = std.mem.zeroes(stdx.windows.OVERLAPPED),
                     .completion = completion,
                 },
             },
@@ -1144,13 +1186,9 @@ pub const IO = struct {
     pub const socket_t = posix.socket_t;
 
     /// Creates a TCP socket that can be used for async operations with the IO instance.
-    pub fn open_socket_tcp(
-        self: *IO,
-        family: stdx.IPAddress.Family,
-        options: TCPOptions,
-    ) !socket_t {
+    pub fn open_socket_tcp(self: *IO, family: u32, options: TCPOptions) !socket_t {
         const socket = try self.open_socket(
-            family.to_std(),
+            @bitCast(family),
             posix.SOCK.STREAM,
             posix.IPPROTO.TCP,
         );
@@ -1161,9 +1199,9 @@ pub const IO = struct {
     }
 
     /// Creates a UDP socket that can be used for async operations with the IO instance.
-    pub fn open_socket_udp(self: *IO, family: stdx.IPAddress.Family) !socket_t {
+    pub fn open_socket_udp(self: *IO, family: u32) !socket_t {
         return try self.open_socket(
-            family.to_std(),
+            @bitCast(family),
             posix.SOCK.DGRAM,
             posix.IPPROTO.UDP,
         );
@@ -1172,10 +1210,10 @@ pub const IO = struct {
     fn open_socket(self: *IO, family: u32, sock_type: i32, protocol: i32) !socket_t {
         // Equivalent to SOCK_NONBLOCK | SOCK_CLOEXEC.
         const socket_flags: os.windows.DWORD =
-            os.windows.ws2_32.WSA_FLAG_OVERLAPPED |
-            os.windows.ws2_32.WSA_FLAG_NO_HANDLE_INHERIT;
+            stdx.windows.WSA_FLAG_OVERLAPPED |
+            stdx.windows.WSA_FLAG_NO_HANDLE_INHERIT;
 
-        const socket = try os.windows.WSASocketW(
+        const socket = try stdx.windows.wsa_socket_w(
             @bitCast(family),
             sock_type,
             protocol,
@@ -1191,21 +1229,21 @@ pub const IO = struct {
 
     /// Register the IO handle for overlapped operations.
     fn register_handle(self: *IO, handle: os.windows.HANDLE) !void {
-        const iocp_handle = try os.windows.CreateIoCompletionPort(handle, self.iocp, 0, 0);
+        const iocp_handle = try stdx.windows.create_io_completion_port(handle, self.iocp, 0, 0);
         assert(iocp_handle == self.iocp);
 
         // Ensure that synchronous IO completion doesn't queue an unneeded overlapped
         // and that the event for the handle (WaitForSingleObject) doesn't need to be set.
         var mode: os.windows.BYTE = 0;
-        mode |= os.windows.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS;
-        mode |= os.windows.FILE_SKIP_SET_EVENT_ON_HANDLE;
-        try os.windows.SetFileCompletionNotificationModes(handle, mode);
+        mode |= stdx.windows.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS;
+        mode |= stdx.windows.FILE_SKIP_SET_EVENT_ON_HANDLE;
+        try stdx.windows.set_file_completion_notification_modes(handle, mode);
     }
 
     /// Closes a socket opened by the IO instance.
     pub fn close_socket(self: *IO, socket: socket_t) void {
         _ = self;
-        _ = os.windows.ws2_32.closesocket(socket);
+        stdx.windows.close_socket(socket);
     }
 
     /// Listen on the given TCP socket.
@@ -1214,20 +1252,45 @@ pub const IO = struct {
     pub fn listen(
         _: *IO,
         fd: socket_t,
-        address: stdx.SocketAddress,
+        address: std.Io.net.IpAddress,
         options: ListenOptions,
-    ) !stdx.SocketAddress {
-        return try common.listen(fd, address, options);
+    ) !std.Io.net.IpAddress {
+        try stdx.windows.setsockopt(
+            fd,
+            posix.SOL.SOCKET,
+            posix.SO.REUSEADDR,
+            &std.mem.toBytes(@as(c_int, 1)),
+        );
+
+        const sockaddr, const sockaddr_len = stdx.ip_address_to_sockaddr(address);
+        try stdx.windows.bind_socket(fd, &sockaddr.any, sockaddr_len);
+
+        var sockaddr_resolved: stdx.PosixAddress = undefined;
+        var sockaddr_resolved_len: posix.socklen_t = @sizeOf(stdx.PosixAddress);
+        try stdx.windows.getsockname(fd, &sockaddr_resolved.any, &sockaddr_resolved_len);
+        const address_resolved = stdx.sockaddr_to_ip_address(&sockaddr_resolved);
+        assert(std.meta.activeTag(address_resolved) == std.meta.activeTag(address));
+
+        try stdx.windows.listen_socket(fd, options.backlog);
+        return address_resolved;
     }
 
-    pub fn shutdown(_: *IO, socket: socket_t, how: posix.ShutdownHow) posix.ShutdownError!void {
-        return posix.shutdown(socket, how);
+    pub fn shutdown(
+        _: *IO,
+        socket: socket_t,
+        how: stdx.windows.ShutdownHow,
+    ) stdx.windows.ShutdownError!void {
+        return stdx.windows.shutdown_socket(socket, how);
     }
 
     /// Opens a directory with read only access.
     pub fn open_dir(dir_path: []const u8) !fd_t {
-        const dir = try std.fs.cwd().openDir(dir_path, .{});
-        return dir.fd;
+        const dir = try std.Io.Dir.cwd().openDir(
+            std.Io.Threaded.global_single_threaded.io(),
+            dir_path,
+            .{},
+        );
+        return dir.handle;
     }
 
     pub const fd_t = posix.fd_t;
@@ -1239,17 +1302,19 @@ pub const IO = struct {
         relative_path: []const u8,
         purpose: enum { format, open, inspect },
     ) !fd_t {
-        const path_w = try os.windows.sliceToPrefixedFileW(dir_handle, relative_path);
+        var path_w_buffer: [os.windows.PATH_MAX_WIDE]u16 = undefined;
+        const path_w_len = try std.unicode.wtf8ToWtf16Le(&path_w_buffer, relative_path);
+        const path_w = path_w_buffer[0..path_w_len];
 
         // FILE_CREATE = O_CREAT | O_EXCL
-        var creation_disposition: os.windows.DWORD = 0;
+        var creation_disposition: os.windows.FILE.CREATE_DISPOSITION = undefined;
         switch (purpose) {
             .format => {
-                creation_disposition = os.windows.FILE_CREATE;
+                creation_disposition = os.windows.FILE.CREATE_DISPOSITION.CREATE;
                 log.info("creating \"{s}\"...", .{relative_path});
             },
             .open, .inspect => {
-                creation_disposition = os.windows.OPEN_EXISTING;
+                creation_disposition = os.windows.FILE.CREATE_DISPOSITION.OPEN;
                 log.info("opening \"{s}\"...", .{relative_path});
             },
         }
@@ -1262,27 +1327,27 @@ pub const IO = struct {
         // https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
         // FILE_GENERIC_READ should include SYNCHRONIZE but it does not.
         var access_mask: os.windows.DWORD = 0;
-        access_mask |= os.windows.SYNCHRONIZE;
-        access_mask |= os.windows.GENERIC_READ;
+        access_mask |= stdx.windows.SYNCHRONIZE;
+        access_mask |= stdx.windows.GENERIC_READ;
 
         if (purpose != .inspect) {
-            access_mask |= os.windows.GENERIC_WRITE;
+            access_mask |= stdx.windows.GENERIC_WRITE;
         }
 
         // O_DIRECT | O_DSYNC
         // NB: These are NtDll flags, not to be confused with the Win32 style flags that are
         // similar but different (!).
         var attributes: os.windows.DWORD = 0;
-        attributes |= os.windows.FILE_NO_INTERMEDIATE_BUFFERING;
-        attributes |= os.windows.FILE_WRITE_THROUGH;
+        attributes |= stdx.windows.FILE_NO_INTERMEDIATE_BUFFERING;
+        attributes |= stdx.windows.FILE_WRITE_THROUGH;
 
         // This is critical as we rely on O_DSYNC for fsync() whenever we write to the file:
-        assert((attributes & os.windows.FILE_WRITE_THROUGH) > 0);
+        assert((attributes & stdx.windows.FILE_WRITE_THROUGH) > 0);
 
         // It's a little confusing, but with NtCreateFile, which is what windows_open_file uses
         // under the hood, not specifying anything gets you a file capable of overlapped IO.
         // FILE_FLAG_OVERLAPPED and co belong to the higher level kernel32 API.
-        const handle = try windows_open_file(path_w.span(), .{
+        const handle = try windows_open_file(path_w, .{
             .access_mask = access_mask,
             .dir = dir_handle,
             .sa = null,
@@ -1293,7 +1358,7 @@ pub const IO = struct {
         }, attributes);
 
         if (handle == os.windows.INVALID_HANDLE_VALUE) {
-            return switch (os.windows.kernel32.GetLastError()) {
+            return switch (os.windows.GetLastError()) {
                 .FILE_NOT_FOUND => error.FileNotFound,
                 .SHARING_VIOLATION, .ACCESS_DENIED => error.AccessDenied,
                 else => |err| {
@@ -1361,7 +1426,7 @@ pub const IO = struct {
 
         // Ask the file system to allocate contiguous sectors for the file (if possible):
         if (purpose == .format) {
-            log.info("allocating {}...", .{std.fmt.fmtIntSizeBin(size)});
+            log.info("allocating {d} bytes...", .{size});
             fs_allocate(handle, size) catch {
                 log.warn("file system failed to preallocate the file memory", .{});
                 log.info("allocating by writing to the last sector of the file instead...", .{});
@@ -1373,11 +1438,11 @@ pub const IO = struct {
                 const write_offset = size - sector.len;
                 var written: usize = 0;
                 while (written < sector.len) {
-                    written += try posix.pwrite(
-                        handle,
-                        sector[written..],
-                        write_offset + written,
-                    );
+                    var overlapped = std.mem.zeroes(stdx.windows.OVERLAPPED);
+                    const offset = write_offset + written;
+                    overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.Offset = @truncate(offset);
+                    overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.OffsetHigh = @truncate(offset >> 32);
+                    written += try stdx.windows.write_file(handle, sector[written..], &overlapped);
                 }
             };
         }
@@ -1387,7 +1452,7 @@ pub const IO = struct {
         // We therefore always fsync when we open the path, also to wait for any pending O_DSYNC.
         // Thanks to Alex Miller from FoundationDB for diving into our source and pointing this out.
         if (purpose != .inspect) {
-            try posix.fsync(handle);
+            try stdx.windows.flush_file_buffers(handle);
         }
 
         // We cannot fsync the directory handle on Windows.
@@ -1395,7 +1460,7 @@ pub const IO = struct {
         //
         // try posix.fsync(dir_handle);
 
-        const file_size = try os.windows.GetFileSizeEx(handle);
+        const file_size = try stdx.windows.get_file_size_ex(handle);
         if (file_size < size) @panic("data file inode size was truncated or corrupted");
 
         return handle;
@@ -1407,14 +1472,14 @@ pub const IO = struct {
 
         // hEvent = null
         // Offset & OffsetHigh = 0
-        var lock_overlapped = std.mem.zeroes(os.windows.OVERLAPPED);
+        var lock_overlapped = std.mem.zeroes(stdx.windows.OVERLAPPED);
 
         // LOCK_EX | LOCK_NB
         var lock_flags: os.windows.DWORD = 0;
         lock_flags |= stdx.windows.LOCKFILE_EXCLUSIVE_LOCK;
         lock_flags |= stdx.windows.LOCKFILE_FAIL_IMMEDIATELY;
 
-        const locked = stdx.windows.LockFileEx(
+        const locked = stdx.windows.lock_file_ex(
             handle,
             lock_flags,
             0, // Reserved param is always zero.
@@ -1423,8 +1488,8 @@ pub const IO = struct {
             &lock_overlapped,
         );
 
-        if (locked == os.windows.FALSE) {
-            return switch (os.windows.kernel32.GetLastError()) {
+        if (locked == stdx.windows.FALSE) {
+            return switch (os.windows.GetLastError()) {
                 .IO_PENDING => error.WouldBlock,
                 else => |err| os.windows.unexpectedError(err),
             };
@@ -1436,49 +1501,74 @@ pub const IO = struct {
         // NOTE: Requires SE_MANAGE_VOLUME_NAME privilege
 
         // Move the file pointer to the start + size.
-        const seeked = os.windows.kernel32.SetFilePointerEx(
-            handle,
-            @intCast(size),
-            null, // No reference to new file pointer.
-            os.windows.FILE_BEGIN,
-        );
-
-        if (seeked == os.windows.FALSE) {
-            return switch (os.windows.kernel32.GetLastError()) {
-                .INVALID_HANDLE => unreachable,
-                .INVALID_PARAMETER => unreachable,
-                else => |err| os.windows.unexpectedError(err),
-            };
-        }
+        try stdx.windows.set_file_pointer_ex(handle, size);
 
         // Mark the moved file pointer (start + size) as the physical EOF.
-        const allocated = stdx.windows.SetEndOfFile(handle);
-        if (allocated == os.windows.FALSE) {
-            const err = os.windows.kernel32.GetLastError();
+        const allocated = stdx.windows.set_end_of_file(handle);
+        if (allocated == stdx.windows.FALSE) {
+            const err = os.windows.GetLastError();
             return os.windows.unexpectedError(err);
         }
     }
 
     pub const PReadError = posix.PReadError;
 
-    pub fn aof_blocking_write_all(_: *IO, fd: fd_t, buffer: []const u8) posix.WriteError!void {
-        return common.aof_blocking_write_all(fd, buffer);
+    pub fn aof_blocking_write_all(_: *IO, fd: fd_t, buffer: []const u8) common.AOFError!void {
+        var remaining = buffer;
+        while (remaining.len > 0) {
+            const written = stdx.windows.write_file(fd, remaining, null) catch
+                return error.Unexpected;
+            remaining = remaining[written..];
+        }
     }
 
-    pub fn aof_blocking_pread_all(_: *IO, fd: fd_t, buffer: []u8, offset: u64) PReadError!usize {
-        return common.aof_blocking_pread_all(fd, buffer, offset);
+    pub fn aof_blocking_pread_all(
+        _: *IO,
+        fd: fd_t,
+        buffer: []u8,
+        offset: u64,
+    ) common.AOFError!usize {
+        var overlapped = std.mem.zeroes(stdx.windows.OVERLAPPED);
+        overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.Offset = @truncate(offset);
+        overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.OffsetHigh = @truncate(offset >> 32);
+        return stdx.windows.read_file(fd, buffer, &overlapped) catch return error.Unexpected;
     }
 
     pub fn aof_blocking_close(_: *IO, fd: fd_t) void {
-        return common.aof_blocking_close(fd);
+        os.windows.CloseHandle(fd);
     }
 
-    pub fn aof_blocking_stat(_: *IO, path: []const u8) std.fs.Dir.StatFileError!std.fs.File.Stat {
-        return common.aof_blocking_stat(path);
+    pub fn aof_blocking_stat(io: *IO, path: []const u8) common.AOFError!common.AOFStat {
+        const fd = aof_blocking_open_read_only(io, path) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.AccessDenied => return error.AccessDenied,
+            else => return error.Unexpected,
+        };
+        defer os.windows.CloseHandle(fd);
+
+        return .{
+            .inode = 0,
+            .size = stdx.windows.get_file_size_ex(fd) catch return error.Unexpected,
+        };
     }
 
-    pub fn aof_blocking_fstat(_: *IO, fd: fd_t) std.fs.Dir.StatError!std.fs.File.Stat {
-        return common.aof_blocking_fstat(fd);
+    pub fn aof_blocking_fstat(_: *IO, fd: fd_t) common.AOFError!common.AOFStat {
+        return .{
+            .inode = 0,
+            .size = stdx.windows.get_file_size_ex(fd) catch return error.Unexpected,
+        };
+    }
+
+    pub fn aof_blocking_open_read_only(io: *IO, path: []const u8) !fd_t {
+        stdx.maybe(std.fs.path.isAbsolute(path));
+
+        const dir_path = std.fs.path.dirname(path) orelse ".";
+        const dir_fd = try IO.open_dir(dir_path);
+        defer io.aof_blocking_close(dir_fd);
+
+        const file_path = std.fs.path.basename(path);
+
+        return try io.open_file_handle(dir_fd, file_path, .inspect);
     }
 
     pub fn aof_blocking_open(io: *IO, path: []const u8) !fd_t {
@@ -1490,7 +1580,7 @@ pub const IO = struct {
 
         const file_path = std.fs.path.basename(path);
 
-        return common.aof_blocking_open(dir_fd, file_path);
+        return try io.open_file_handle(dir_fd, file_path, .open);
     }
 };
 
@@ -1498,35 +1588,23 @@ pub const IO = struct {
 fn getsockoptError(socket: posix.socket_t) IO.ConnectError!void {
     var err_code: u32 = undefined;
     var size: i32 = @sizeOf(u32);
-    const rc = os.windows.ws2_32.getsockopt(
+    stdx.windows.getsockopt(
         socket,
         posix.SOL.SOCKET,
         posix.SO.ERROR,
         std.mem.asBytes(&err_code),
         &size,
-    );
-
-    if (rc != 0) {
-        switch (os.windows.ws2_32.WSAGetLastError()) {
-            .WSAENETDOWN => return error.NetworkUnreachable,
-            .WSANOTINITIALISED => unreachable, // WSAStartup() was never called.
-
-            // The address pointed to by optval or optlen is not in a valid part of the process
-            // address space.
-            .WSAEFAULT => unreachable,
-
-            .WSAEINVAL => unreachable, // The level parameter is unknown or invalid.
-            .WSAENOPROTOOPT => unreachable, // The option is unknown at the level indicated.
-            .WSAENOTSOCK => return error.FileDescriptorNotASocket,
-            else => |err| return os.windows.unexpectedWSAError(err),
-        }
-    }
+    ) catch |err| switch (err) {
+        error.NetworkUnreachable => return error.NetworkUnreachable,
+        error.FileDescriptorNotASocket => return error.FileDescriptorNotASocket,
+        else => return err,
+    };
 
     assert(size == 4);
     if (err_code == 0)
         return;
 
-    const ws_err: os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err_code)));
+    const ws_err: stdx.windows.WinsockError = @enumFromInt(@as(u16, @intCast(err_code)));
     return switch (ws_err) {
         .WSAEACCES => error.PermissionDenied,
         .WSAEADDRINUSE => error.AddressInUse,
@@ -1542,17 +1620,40 @@ fn getsockoptError(socket: posix.socket_t) IO.ConnectError!void {
         .WSAEPROTOTYPE => unreachable,
         .WSAETIMEDOUT => error.ConnectionTimedOut,
         .WSAECONNRESET => error.ConnectionResetByPeer,
-        else => |e| os.windows.unexpectedWSAError(e),
+        else => |e| stdx.windows.unexpected_wsa_error(e),
     };
 }
+
+const WindowsOpenFileOptions = struct {
+    access_mask: os.windows.DWORD,
+    dir: ?os.windows.HANDLE,
+    sa: ?*os.windows.SECURITY_ATTRIBUTES,
+    share_access: os.windows.DWORD,
+    creation: os.windows.FILE.CREATE_DISPOSITION,
+    filter: enum { file_only, dir_only, any },
+    follow_symlinks: bool,
+};
+
+const WindowsOpenError = error{
+    IsDir,
+    NameTooLong,
+    FileNotFound,
+    NetworkNotFound,
+    NoDevice,
+    AccessDenied,
+    PipeBusy,
+    PathAlreadyExists,
+    NotDir,
+    Unexpected,
+};
 
 // Vendor std.os.windows.OpenFile so we can set file attributes. Add it as a parameter after
 // `options`, so we don't have to vendor that struct too.
 pub fn windows_open_file(
     sub_path_w: []const u16,
-    options: os.windows.OpenFileOptions,
+    options: WindowsOpenFileOptions,
     file_flags: os.windows.ULONG,
-) os.windows.OpenError!os.windows.HANDLE {
+) WindowsOpenError!os.windows.HANDLE {
     if (std.mem.eql(u16, sub_path_w, &[_]u16{'.'}) and options.filter == .file_only) {
         return error.IsDir;
     }
@@ -1568,36 +1669,36 @@ pub fn windows_open_file(
         .MaximumLength = path_len_bytes,
         .Buffer = @constCast(sub_path_w.ptr),
     };
-    var attr = os.windows.OBJECT_ATTRIBUTES{
-        .Length = @sizeOf(os.windows.OBJECT_ATTRIBUTES),
-        .RootDirectory = if (std.fs.path.isAbsoluteWindowsWTF16(sub_path_w)) null else options.dir,
-        .Attributes = 0, // Note we do not use OBJ_CASE_INSENSITIVE here.
+    var attr = os.windows.OBJECT.ATTRIBUTES{
+        .Length = @sizeOf(os.windows.OBJECT.ATTRIBUTES),
+        .RootDirectory = options.dir,
+        .Attributes = .{}, // Note we do not use OBJ_CASE_INSENSITIVE here.
         .ObjectName = &nt_name,
         .SecurityDescriptor = if (options.sa) |ptr| ptr.lpSecurityDescriptor else null,
         .SecurityQualityOfService = null,
     };
     var io: os.windows.IO_STATUS_BLOCK = undefined;
     const file_or_dir_flag: os.windows.ULONG = switch (options.filter) {
-        .file_only => os.windows.FILE_NON_DIRECTORY_FILE,
-        .dir_only => os.windows.FILE_DIRECTORY_FILE,
+        .file_only => stdx.windows.FILE_NON_DIRECTORY_FILE,
+        .dir_only => stdx.windows.FILE_DIRECTORY_FILE,
         .any => 0,
     };
     // This code is changed slightly from Zig's stdlib: there, options.follow_symlinks enforces
     // FILE_SYNCHRONOUS_IO_NONALERT which stops overlapped IO.
     assert(!options.follow_symlinks);
-    const flags: os.windows.ULONG = file_or_dir_flag | os.windows.FILE_OPEN_REPARSE_POINT;
+    const flags: os.windows.ULONG = file_or_dir_flag | stdx.windows.FILE_OPEN_REPARSE_POINT;
 
     while (true) {
         const rc = os.windows.ntdll.NtCreateFile(
             &result,
-            options.access_mask,
+            @bitCast(options.access_mask),
             &attr,
             &io,
             null,
-            os.windows.FILE_ATTRIBUTE_NORMAL,
-            options.share_access,
+            .{ .NORMAL = true },
+            @bitCast(options.share_access),
             options.creation,
-            flags | file_flags,
+            @bitCast(flags | file_flags),
             null,
             0,
         );
@@ -1627,7 +1728,7 @@ pub fn windows_open_file(
                 // call has failed. There is not really a sane way to handle
                 // this other than retrying the creation after the OS finishes
                 // the deletion.
-                std.time.sleep(std.time.ns_per_ms);
+                stdx.windows.sleep(1);
                 continue;
             },
             else => return os.windows.unexpectedStatus(rc),

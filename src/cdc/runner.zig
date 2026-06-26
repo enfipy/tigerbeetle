@@ -43,6 +43,7 @@ pub const Runner = struct {
     };
 
     io: IO,
+    time: Time,
     idle_completion: IO.Completion = undefined,
     idle_interval: stdx.Duration,
     event_count_max: u32,
@@ -116,9 +117,9 @@ pub const Runner = struct {
             /// TigerBeetle cluster ID.
             cluster_id: u128,
             /// TigerBeetle cluster addresses.
-            addresses: []const stdx.SocketAddress,
+            addresses: []const std.Io.net.IpAddress,
             /// AMQP host address.
-            host: stdx.SocketAddress,
+            host: std.Io.net.IpAddress,
             /// AMQP User name for PLAIN authentication.
             user: []const u8,
             /// AMQP Password for PLAIN authentication.
@@ -215,6 +216,7 @@ pub const Runner = struct {
             .locker_queue = locker_queue_owned,
             .connected = .{},
             .io = undefined,
+            .time = time,
             .producer = .idle,
             .consumer = .idle,
             .rate_limit = undefined,
@@ -915,7 +917,7 @@ pub const Runner = struct {
                     .immediate = false,
                     .properties = .{
                         .delivery_mode = .persistent,
-                        .timestamp = @intCast(std.time.milliTimestamp()),
+                        .timestamp = @intCast(@divTrunc(self.time.realtime(), std.time.ns_per_ms)),
                         .headers = progress_tracker.header(),
                     },
                     .body = null,
@@ -1259,17 +1261,16 @@ const ProgressTrackerMessage = struct {
             .write = &struct {
                 fn write(context: *const anyopaque, encoder: *amqp.Encoder.TableEncoder) void {
                     const message: *const ProgressTrackerMessage = @ptrCast(@alignCast(context));
-                    var release_buffer: [
-                        std.fmt.count("{}", vsr.Release.from(.{
-                            .major = std.math.maxInt(u16),
-                            .minor = std.math.maxInt(u8),
-                            .patch = std.math.maxInt(u8),
-                        }))
-                    ]u8 = undefined;
+                    var release_buffer: [32]u8 = undefined;
+                    const release_triple = message.release.triple();
                     encoder.put("release", .{ .string = std.fmt.bufPrint(
                         &release_buffer,
-                        "{}",
-                        .{message.release},
+                        "{d}.{d}.{d}",
+                        .{
+                            release_triple.major,
+                            release_triple.minor,
+                            release_triple.patch,
+                        },
                     ) catch unreachable });
                     encoder.put("timestamp", .{ .int64 = @intCast(message.timestamp) });
                 }
@@ -1324,16 +1325,18 @@ pub const Message = struct {
     pub const content_type = "application/json";
 
     pub const json_string_size_max = size: {
-        var counting_writer = std.io.countingWriter(std.io.null_writer);
-        std.json.stringify(
+        @setEvalBranchQuota(100_000);
+        var buffer: [0]u8 = .{};
+        var discarding = std.Io.Writer.Discarding.init(&buffer);
+        std.json.Stringify.value(
             worse_case(Message),
             stringify_options,
-            counting_writer.writer(),
+            &discarding.writer,
         ) catch unreachable;
-        break :size counting_writer.bytes_written;
+        break :size discarding.fullCount();
     };
 
-    const stringify_options = std.json.StringifyOptions{
+    const stringify_options = std.json.Stringify.Options{
         .whitespace = .minified,
         .emit_nonportable_numbers_as_strings = true,
     };
@@ -1455,12 +1458,9 @@ pub const Message = struct {
             .write = &struct {
                 fn write(context: *const anyopaque, buffer: []u8) usize {
                     const message: *const Message = @ptrCast(@alignCast(context));
-                    var fbs = std.io.fixedBufferStream(buffer);
-                    std.json.stringify(message, .{
-                        .whitespace = .minified,
-                        .emit_nonportable_numbers_as_strings = true,
-                    }, fbs.writer()) catch unreachable;
-                    return fbs.pos;
+                    var writer = std.Io.Writer.fixed(buffer);
+                    std.json.Stringify.value(message, stringify_options, &writer) catch unreachable;
+                    return writer.end;
                 }
             }.write,
         };
@@ -1470,7 +1470,7 @@ pub const Message = struct {
     /// Fill all fields for the largest string representation.
     fn worse_case(comptime T: type) T {
         var value: T = undefined;
-        for (std.meta.fields(T)) |field| {
+        for (stdx.type_fields(T)) |field| {
             @field(value, field.name) = switch (@typeInfo(field.type)) {
                 .int => std.math.maxInt(field.type),
                 .@"enum" => max: {

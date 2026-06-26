@@ -69,7 +69,8 @@ const type_mappings = .{
         .docs_link = "reference/account#",
     } },
     .{
-        tb.Transfer, TypeMapping{
+        tb.Transfer,
+        TypeMapping{
             .name = "Transfer",
             .visibility = .public,
             .private_fields = &.{"reserved"},
@@ -447,7 +448,7 @@ pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
                     info,
                     mapping,
                     comptime dotnet_type(
-                        std.meta.Int(.unsigned, @bitSizeOf(ZigType)),
+                        @Int(.unsigned, @bitSizeOf(ZigType)),
                     ),
                 ),
                 .@"extern" => try emit_struct(
@@ -462,7 +463,7 @@ pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
                 ZigType,
                 info,
                 mapping,
-                comptime dotnet_type(std.meta.Int(.unsigned, @bitSizeOf(ZigType))),
+                comptime dotnet_type(@Int(.unsigned, @bitSizeOf(ZigType))),
             ),
             else => @compileError("Type cannot be represented: " ++ @typeName(ZigType)),
         }

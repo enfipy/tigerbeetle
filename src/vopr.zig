@@ -97,7 +97,7 @@ pub fn main() !void {
     log_buffer.unbuffered_writer = std.io.getStdErr().writer();
     fuzz.limit_ram();
 
-    var gpa_instance: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var gpa_instance: std.heap.DebugAllocator(.{}) = .{};
     defer {
         _ = gpa_instance.detectLeaks();
         switch (gpa_instance.deinit()) {

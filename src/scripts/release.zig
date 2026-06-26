@@ -71,7 +71,7 @@ pub fn main(shell: *Shell, gpa: std.mem.Allocator, cli_args: CLIArgs) !void {
     const languages = if (cli_args.language) |language|
         LanguageSet.initOne(language)
     else
-        LanguageSet.initFull();
+        LanguageSet.full;
 
     if (cli_args.devhub) {
         if (cli_args.language == null or cli_args.language.? != .zig) {

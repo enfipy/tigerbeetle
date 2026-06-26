@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const posix = std.posix;
 const assert = std.debug.assert;
 
 const log = std.log.scoped(.tb_client_context);
@@ -160,7 +161,7 @@ pub fn ContextType(
 ) type {
     return struct {
         const Context = @This();
-        const GPA = std.heap.GeneralPurposeAllocator(.{
+        const GPA = std.heap.DebugAllocator(.{
             .thread_safe = true,
         });
 
@@ -211,7 +212,7 @@ pub fn ContextType(
         cluster_id: u128,
         addresses_owned: []const u8,
 
-        addresses: stdx.BoundedArrayType(stdx.SocketAddress, constants.replicas_max) = .{},
+        addresses: stdx.BoundedArrayType(std.Io.net.IpAddress, constants.replicas_max) = .{},
         io: IO,
         message_pool: MessagePool,
         client: Client,
@@ -1049,7 +1050,7 @@ pub fn ContextType(
 /// Implements the `Mutex` API as an `extern` struct, based on `std.Thread.Futex`.
 /// Vendored from `std.Thread.Mutex.FutexImpl`.
 const Locker = extern struct {
-    const Futex = std.Thread.Futex;
+    const linux = std.os.linux;
     const unlocked: u32 = 0b00;
     const locked: u32 = 0b01;
     const contended: u32 = 0b11; // Must contain the `locked` bit for x86 optimization below.
@@ -1083,7 +1084,7 @@ const Locker = extern struct {
         // An atomic swap unconditionally stores which marks the cache-line as modified
         // unnecessarily.
         if (self.state.load(.monotonic) == contended) {
-            Futex.wait(&self.state, contended);
+            futex_wait(&self.state, contended);
         }
 
         // Try to acquire the lock while also telling the existing lock holder that there are
@@ -1099,23 +1100,66 @@ const Locker = extern struct {
         // Acquire barrier ensures grabbing the lock happens before the critical section
         // and that the previous lock holder's critical section happens before we grab the lock.
         while (self.state.swap(contended, .acquire) != unlocked) {
-            Futex.wait(&self.state, contended);
+            futex_wait(&self.state, contended);
         }
     }
 
     fn unlock(self: *Locker) void {
-        // Unlock the mutex and wake up a waiting thread if any.
-        //
-        // A waiting thread will acquire with `contended` instead of `locked`
-        // which ensures that it wakes up another thread on the next unlock().
-        //
-        // Release barrier ensures the critical section happens before we let go of the lock
-        // and that our critical section happens before the next lock holder grabs the lock.
         const state = self.state.swap(unlocked, .release);
         assert(state != unlocked);
 
         if (state == contended) {
-            Futex.wake(&self.state, 1);
+            futex_wake(&self.state, 1);
+        }
+    }
+
+    fn futex_wait(state_ptr: *std.atomic.Value(u32), expected: u32) void {
+        if (comptime builtin.target.os.tag == .linux) {
+            while (true) {
+                switch (linux.errno(linux.futex_4arg(
+                    &state_ptr.raw,
+                    .{ .cmd = .WAIT, .private = true },
+                    expected,
+                    null,
+                ))) {
+                    .SUCCESS, .INTR, .AGAIN => return,
+                    else => unreachable,
+                }
+            }
+        } else if (comptime builtin.target.os.tag.isDarwin()) {
+            const op: posix.system.UL = .{ .op = .COMPARE_AND_WAIT };
+            while (true) {
+                switch (posix.errno(posix.system.__ulock_wait(
+                    op,
+                    &state_ptr.raw,
+                    expected,
+                    0,
+                ))) {
+                    .SUCCESS, .INTR, .AGAIN => return,
+                    else => unreachable,
+                }
+            }
+        } else {
+            @compileError("Locker futex_wait is not implemented for this target");
+        }
+    }
+
+    fn futex_wake(state_ptr: *std.atomic.Value(u32), waiters: u32) void {
+        if (comptime builtin.target.os.tag == .linux) {
+            _ = linux.futex_4arg(
+                &state_ptr.raw,
+                .{ .cmd = .WAKE, .private = true },
+                waiters,
+                null,
+            );
+        } else if (comptime builtin.target.os.tag.isDarwin()) {
+            const op: posix.system.UL = .{
+                .op = .COMPARE_AND_WAIT,
+                .WAKE_ALL = waiters != 1,
+            };
+            _ = posix.system.__ulock_wake(op, &state_ptr.raw, 0);
+        } else {
+            @compileError("Locker futex_wake is not implemented for this target");
         }
     }
 };

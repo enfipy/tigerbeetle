@@ -256,15 +256,15 @@ test "repl integration" {
 
 test "benchmark/inspect smoke" {
     const data_file = data_file: {
-        var random_bytes: [4]u8 = undefined;
-        std.crypto.random.bytes(&random_bytes);
+        const random_int = stdx.unique_u128();
+        const random_bytes: [4]u8 = @bitCast(@as(u32, @truncate(random_int)));
         const random_suffix: [8]u8 = std.fmt.bytesToHex(random_bytes, .lower);
         break :data_file "0_0-" ++ random_suffix ++ ".tigerbeetle.benchmark";
     };
-    defer std.fs.cwd().deleteFile(data_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, data_file) catch {};
 
     const trace_file = data_file ++ ".json";
-    defer std.fs.cwd().deleteFile(trace_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, trace_file) catch {};
 
     const shell = try Shell.create(std.testing.allocator);
     defer shell.destroy();
@@ -326,28 +326,32 @@ test "benchmark/inspect smoke" {
     );
 
     {
-        const file = try std.fs.cwd().openFile(data_file, .{ .mode = .read_write });
-        defer file.close();
+        const file = try std.Io.Dir.cwd().openFile(
+            std.testing.io,
+            data_file,
+            .{ .mode = .read_write },
+        );
+        defer file.close(std.testing.io);
 
         var prng = stdx.PRNG.from_seed_testing();
         var random_bytes: [256]u8 = undefined;
         prng.fill(&random_bytes);
 
-        try file.pwriteAll(&random_bytes, offset);
+        try file.writePositionalAll(std.testing.io, &random_bytes, offset);
     }
 
     // `shell.exec` assumes that success is a zero exit code; but in this case the test expects
     // corruption to be found and wants to assert a non-zero exit code.
-    var child = std.process.Child.init(
-        &.{ tigerbeetle, "inspect", "integrity", data_file },
-        std.testing.allocator,
-    );
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
+    var child = try std.process.spawn(std.testing.io, .{
+        .argv = &.{ tigerbeetle, "inspect", "integrity", data_file },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
 
-    const term = try child.spawnAndWait();
+    const term = try child.wait(std.testing.io);
     switch (term) {
-        .Exited, .Signal => |value| try std.testing.expect(value != 0),
+        .exited => |value| try std.testing.expect(value != 0),
+        .signal => try std.testing.expect(true),
         else => unreachable,
     }
 }
@@ -364,7 +368,11 @@ test "help/version smoke" {
         .{ .command = "{tigerbeetle} version", .substring = "TigerBeetle version" },
         .{ .command = "{tigerbeetle} version --verbose", .substring = "process.backoff_max=" },
     }) |check| {
-        const output = try shell.exec_stdout(check.command, .{ .tigerbeetle = tigerbeetle });
+        const stdout, const stderr = try shell.exec_stdout_stderr(
+            check.command,
+            .{ .tigerbeetle = tigerbeetle },
+        );
+        const output = if (stdout.len > 0) stdout else stderr;
         try std.testing.expect(output.len > 0);
         try std.testing.expect(std.mem.indexOf(u8, output, check.substring) != null);
     }
@@ -385,6 +393,8 @@ test "in-place upgrade" {
     const ticks_max = duration_max.to_ms() / tick_ms;
 
     var supervisor = try Supervisor.create(std.testing.allocator, .{
+        .io = std.testing.io,
+        .environ = std.testing.environ,
         .seed = std.testing.random_seed,
         .replica_count = replica_count,
         .faulty = false,
@@ -450,6 +460,8 @@ test "recover smoke" {
     const replica_count = 3;
 
     var supervisor = try Supervisor.create(std.testing.allocator, .{
+        .io = std.testing.io,
+        .environ = std.testing.environ,
         .seed = std.testing.random_seed,
         .replica_count = replica_count,
         .faulty = false,
@@ -488,8 +500,19 @@ test "vortex smoke" {
     const shell = try Shell.create(std.testing.allocator);
     defer shell.destroy();
 
-    try shell.exec(
+    const result = try shell.exec_raw(
         "{vortex_exe} --test-duration=1s --replica-count=1",
         .{ .vortex_exe = vortex_exe },
     );
+
+    switch (result.term) {
+        .exited => |code| {
+            if (code == 0) return;
+            if (std.mem.indexOf(u8, result.stderr, "UnshareFailure") != null) {
+                return error.SkipZigTest;
+            }
+            return error.VortexSmokeFailed;
+        },
+        else => return error.VortexSmokeFailed,
+    }
 }

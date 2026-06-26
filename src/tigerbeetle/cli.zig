@@ -14,6 +14,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const fmt = std.fmt;
+const net = std.net;
 
 const vsr = @import("vsr");
 const stdx = vsr.stdx;
@@ -51,7 +52,7 @@ const CLIArgs = union(enum) {
 
     const Recover = struct {
         cluster: u128,
-        addresses: vsr.ClusterAddress,
+        addresses: []const u8,
         replica: u8,
         replica_count: u8,
         development: bool = false,
@@ -63,7 +64,7 @@ const CLIArgs = union(enum) {
 
     const Start = struct {
         // Stable CLI arguments.
-        addresses: vsr.ClusterAddress,
+        addresses: []const u8,
         cache_grid: ?ByteSize = null,
         development: bool = false,
 
@@ -120,7 +121,7 @@ const CLIArgs = union(enum) {
     };
 
     const Repl = struct {
-        addresses: vsr.ClusterAddress,
+        addresses: []const u8,
         cluster: u128,
         verbose: bool = false,
         command: []const u8 = "",
@@ -155,13 +156,13 @@ const CLIArgs = union(enum) {
         checksum_performance: bool = false,
         query_count: u32 = 100,
         print_batch_timings: bool = false,
-        id_order: Command.Benchmark.IdOrder = .tbid,
+        id_order: Command.Benchmark.IdOrder = .sequential,
         clients: u32 = 1,
         statsd: ?[]const u8 = null,
         trace: ?[]const u8 = null,
         /// When set, don't delete the data file when the benchmark completes.
         file: ?[]const u8 = null,
-        addresses: ?vsr.ClusterAddress = null,
+        addresses: ?[]const u8 = null,
         seed: ?[]const u8 = null,
     };
 
@@ -313,7 +314,7 @@ const CLIArgs = union(enum) {
 
     // CDC connector for AMQP targets.
     const AMQP = struct {
-        addresses: vsr.ClusterAddress,
+        addresses: []const u8,
         cluster: u128,
         host: []const u8,
         user: []const u8,
@@ -502,6 +503,7 @@ const lsm_compaction_block_memory_min = lsm_compaction_block_count_min * constan
 /// While CLIArgs store raw arguments as passed on the command line, Command ensures that arguments
 /// are properly validated and desugared (e.g, sizes converted to counts where appropriate).
 pub const Command = union(enum) {
+    const Addresses = stdx.BoundedArrayType(std.Io.net.IpAddress, constants.members_max);
     const Path = stdx.BoundedArrayType(u8, std.fs.max_path_bytes);
 
     pub const Format = struct {
@@ -515,7 +517,7 @@ pub const Command = union(enum) {
 
     pub const Recover = struct {
         cluster: u128,
-        addresses: vsr.ClusterAddress,
+        addresses: Addresses,
         replica: u8,
         replica_count: u8,
         development: bool,
@@ -524,7 +526,11 @@ pub const Command = union(enum) {
     };
 
     pub const Start = struct {
-        addresses: vsr.ClusterAddress,
+        addresses: Addresses,
+        // true when the value of `--addresses` is exactly `0`. Used to enable "magic zero" mode for
+        // testing. We check the raw string rather then the parsed address to prevent triggering
+        // this logic by accident.
+        addresses_zero: bool,
         cache_accounts: u32,
         cache_transfers: u32,
         cache_transfers_pending: u32,
@@ -549,7 +555,7 @@ pub const Command = union(enum) {
         path: []const u8,
         log_debug: bool,
         log_trace: bool,
-        statsd: ?stdx.SocketAddress,
+        statsd: ?std.Io.net.IpAddress,
     };
 
     pub const Version = struct {
@@ -557,7 +563,7 @@ pub const Command = union(enum) {
     };
 
     pub const Repl = struct {
-        addresses: vsr.ClusterAddress,
+        addresses: Addresses,
         cluster: u128,
         verbose: bool,
         statements: []const u8,
@@ -613,7 +619,7 @@ pub const Command = union(enum) {
         statsd: ?[]const u8,
         trace: ?[]const u8,
         file: ?[]const u8,
-        addresses: ?vsr.ClusterAddress,
+        addresses: ?Addresses,
         seed: ?[]const u8,
     };
 
@@ -667,9 +673,9 @@ pub const Command = union(enum) {
     };
 
     pub const AMQP = struct {
-        addresses: vsr.ClusterAddress,
+        addresses: Addresses,
         cluster: u128,
-        host: stdx.SocketAddress,
+        host: std.Io.net.IpAddress,
         user: []const u8,
         password: []const u8,
         vhost: []const u8,
@@ -760,7 +766,7 @@ fn parse_args_format(format: CLIArgs.Format) Command.Format {
     assert(replica < constants.members_max);
     assert(replica < format.replica_count + constants.standbys_max);
 
-    const cluster_random = std.crypto.random.int(u128);
+    const cluster_random = stdx.unique_u128();
     assert(cluster_random != 0);
     const cluster = format.cluster orelse cluster_random;
     if (format.cluster == null) {
@@ -808,7 +814,7 @@ fn parse_args_recover(recover: CLIArgs.Recover) Command.Recover {
 
     return .{
         .cluster = recover.cluster,
-        .addresses = recover.addresses,
+        .addresses = parse_addresses(recover.addresses, "--addresses", Command.Addresses),
         .replica = replica,
         .replica_count = recover.replica_count,
         .development = recover.development,
@@ -824,7 +830,7 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
         "addresses",   "cache_grid",
         "development", "experimental",
     };
-    inline for (std.meta.fields(@TypeOf(start))) |field| {
+    inline for (comptime stdx.type_fields(@TypeOf(start))) |field| {
         @setEvalBranchQuota(4_000);
         // Positional arguments can't be experimental.
         comptime if (std.mem.eql(u8, field.name, "--")) break;
@@ -862,6 +868,7 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     const TransfersValuesCache = groove_config.transfers.ObjectsCache.Cache;
     const TransfersPendingValuesCache = groove_config.transfers_pending.ObjectsCache.Cache;
 
+    const addresses = parse_addresses(start.addresses, "--addresses", Command.Addresses);
     const defaults =
         if (start.development) start_defaults_development else start_defaults_production;
 
@@ -1043,7 +1050,8 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
     }
 
     return .{
-        .addresses = start.addresses,
+        .addresses = addresses,
+        .addresses_zero = std.mem.eql(u8, start.addresses, "0"),
         .storage_size_limit = storage_size_limit,
         .pipeline_requests_limit = pipeline_limit,
         .request_size_limit = @intCast(request_size_limit.bytes()),
@@ -1108,8 +1116,10 @@ fn parse_args_version(version: CLIArgs.Version) Command.Version {
 }
 
 fn parse_args_repl(repl: CLIArgs.Repl) Command.Repl {
+    const addresses = parse_addresses(repl.addresses, "--addresses", Command.Addresses);
+
     return .{
-        .addresses = repl.addresses,
+        .addresses = addresses,
         .cluster = repl.cluster,
         .verbose = repl.verbose,
         .statements = repl.command,
@@ -1128,6 +1138,11 @@ const transfer_batch_count_max = @divExact(
 );
 
 fn parse_args_benchmark(benchmark: CLIArgs.Benchmark) Command.Benchmark {
+    const addresses = if (benchmark.addresses) |addresses|
+        parse_addresses(addresses, "--addresses", Command.Addresses)
+    else
+        null;
+
     if (benchmark.addresses != null and benchmark.file != null) {
         vsr.fatal(.cli, "--file: --addresses and --file are mutually exclusive", .{});
     }
@@ -1183,7 +1198,7 @@ fn parse_args_benchmark(benchmark: CLIArgs.Benchmark) Command.Benchmark {
         .statsd = benchmark.statsd,
         .trace = benchmark.trace,
         .file = benchmark.file,
-        .addresses = benchmark.addresses,
+        .addresses = addresses,
         .seed = benchmark.seed,
     };
 }
@@ -1285,6 +1300,7 @@ fn parse_args_multiversion(multiversion: CLIArgs.Multiversion) Command.Multivers
 }
 
 fn parse_args_amqp(amqp: CLIArgs.AMQP) Command.AMQP {
+    const addresses = parse_addresses(amqp.addresses, "--addresses", Command.Addresses);
     const host = parse_address_and_port(
         amqp.host,
         "--host",
@@ -1340,7 +1356,7 @@ fn parse_args_amqp(amqp: CLIArgs.AMQP) Command.AMQP {
     }
 
     return .{
-        .addresses = amqp.addresses,
+        .addresses = addresses,
         .cluster = amqp.cluster,
         .host = host,
         .user = amqp.user,
@@ -1358,14 +1374,47 @@ fn parse_args_amqp(amqp: CLIArgs.AMQP) Command.AMQP {
     };
 }
 
+/// Parse and allocate the addresses returning a slice into that array.
+fn parse_addresses(
+    raw_addresses: []const u8,
+    comptime flag: []const u8,
+    comptime BoundedArray: type,
+) BoundedArray {
+    comptime assert(std.mem.startsWith(u8, flag, "--"));
+    var result: BoundedArray = .{};
+
+    const addresses_parsed = vsr.parse_addresses(
+        raw_addresses,
+        result.unused_capacity_slice(),
+    ) catch |err| switch (err) {
+        error.AddressHasTrailingComma => {
+            vsr.fatal(.cli, flag ++ ": invalid trailing comma", .{});
+        },
+        error.AddressLimitExceeded => {
+            vsr.fatal(.cli, flag ++ ": too many addresses, at most {d} are allowed", .{
+                result.capacity(),
+            });
+        },
+        error.AddressHasMoreThanOneColon => {
+            vsr.fatal(.cli, flag ++ ": invalid address with more than one colon", .{});
+        },
+        error.PortInvalid => vsr.fatal(.cli, flag ++ ": invalid port", .{}),
+        error.AddressInvalid => vsr.fatal(.cli, flag ++ ": invalid IPv4 or IPv6 address", .{}),
+    };
+    assert(addresses_parsed.len > 0);
+    assert(addresses_parsed.len <= result.capacity());
+    result.resize(addresses_parsed.len) catch unreachable;
+    return result;
+}
+
 fn parse_address_and_port(
     raw_address: []const u8,
     comptime flag: []const u8,
     port_default: u16,
-) stdx.SocketAddress {
+) std.Io.net.IpAddress {
     comptime assert(std.mem.startsWith(u8, flag, "--"));
 
-    return vsr.parse_address_and_port(.{
+    const address = vsr.parse_address_and_port(.{
         .string = raw_address,
         .port_default = port_default,
     }) catch |err| switch (err) {
@@ -1375,6 +1424,7 @@ fn parse_address_and_port(
         error.PortInvalid => vsr.fatal(.cli, flag ++ ": invalid port", .{}),
         error.AddressInvalid => vsr.fatal(.cli, flag ++ ": invalid IPv4 or IPv6 address", .{}),
     };
+    return address;
 }
 
 /// Given a limit like `10GiB`, a SetAssociativeCache and T return the largest `value_count_max`

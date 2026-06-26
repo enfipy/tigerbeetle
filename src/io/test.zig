@@ -22,6 +22,25 @@ pub const tcp_options: IO.TCPOptions = .{
     .nodelay = false,
 };
 
+fn ip_address_family(address: std.Io.net.IpAddress) u32 {
+    return switch (address) {
+        .ip4 => posix.AF.INET,
+        .ip6 => posix.AF.INET6,
+    };
+}
+
+fn sleep_ns(nanoseconds: u64) void {
+    var request: posix.timespec = .{
+        .sec = @intCast(@divFloor(nanoseconds, std.time.ns_per_s)),
+        .nsec = @intCast(nanoseconds % std.time.ns_per_s),
+    };
+    while (true) switch (posix.errno(posix.system.nanosleep(&request, &request))) {
+        .SUCCESS => return,
+        .INTR => continue,
+        else => |err| std.debug.panic("unexpected errno: nanosleep: {}", .{err}),
+    };
+}
+
 test "open/write/read/close/statx" {
     try struct {
         const Context = @This();
@@ -47,7 +66,7 @@ test "open/write/read/close/statx" {
             defer self.io.deinit();
 
             // The file gets created below, either by createFile or openat.
-            defer std.fs.cwd().deleteFile(self.path) catch {};
+            defer std.Io.Dir.cwd().deleteFile(std.testing.io, self.path) catch {};
 
             var completion: IO.Completion = undefined;
 
@@ -60,7 +79,7 @@ test "open/write/read/close/statx" {
                     posix.AT.FDCWD,
                     self.path,
                     .{ .ACCMODE = .RDWR, .TRUNC = true, .CREAT = true },
-                    std.fs.File.default_mode,
+                    0o666,
                 );
             } else {
                 const file = try std.fs.cwd().createFile(self.path, .{
@@ -132,7 +151,7 @@ test "open/write/read/close/statx" {
                     posix.AT.FDCWD,
                     self.path,
                     0,
-                    os.linux.STATX_BASIC_STATS,
+                    os.linux.STATX.BASIC_STATS,
                     &self.statx,
                 );
             } else {
@@ -175,29 +194,20 @@ test "accept/connect/send/receive" {
             var io = try IO.init(32, 0);
             defer io.deinit();
 
-            const address: stdx.SocketAddress = .{ .ip = .@"127.0.0.1", .port = 0 };
+            const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
             const kernel_backlog = 1;
 
-            const server = try io.open_socket_tcp(address.ip.family(), tcp_options);
+            const server = try io.open_socket_tcp(ip_address_family(address), tcp_options);
             defer io.close_socket(server);
 
-            const client = try io.open_socket_tcp(address.ip.family(), tcp_options);
+            const client = try io.open_socket_tcp(ip_address_family(address), tcp_options);
             defer io.close_socket(client);
 
-            try posix.setsockopt(
+            const client_address = try io.listen(
                 server,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
+                address,
+                .{ .backlog = kernel_backlog },
             );
-            const address_std = address.to_std();
-            try posix.bind(server, &address_std.any, address_std.getOsSockLen());
-            try posix.listen(server, kernel_backlog);
-
-            var client_address_std = std.net.Address.initIp4(undefined, undefined);
-            var client_address_std_len = client_address_std.getOsSockLen();
-            try posix.getsockname(server, &client_address_std.any, &client_address_std_len);
-            const client_address = try stdx.SocketAddress.from_std(client_address_std);
 
             var self: Context = .{
                 .io = &io,
@@ -390,7 +400,9 @@ test "event" {
         fn trigger_event(self: *Context) void {
             assert(std.Thread.getCurrentId() != self.main_thread_id);
             while (self.count < events_count) {
-                std.time.sleep(delay + 1);
+                {
+                    sleep_ns(delay + 1);
+                }
 
                 // Triggering the event:
                 self.io.event_trigger(self.event, &self.event_completion);
@@ -476,28 +488,22 @@ test "tick to wait" {
             var self: Context = .{ .io = try IO.init(1, 0) };
             defer self.io.deinit();
 
-            const address: stdx.SocketAddress = .{ .ip = .@"127.0.0.1", .port = 0 };
+            const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
             const kernel_backlog = 1;
 
-            const server = try self.io.open_socket_tcp(address.ip.family(), tcp_options);
+            const server = try self.io.open_socket_tcp(ip_address_family(address), tcp_options);
             defer self.io.close_socket(server);
 
-            try posix.setsockopt(
+            const client_address = try self.io.listen(
                 server,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
+                address,
+                .{ .backlog = kernel_backlog },
             );
-            const address_std = address.to_std();
-            try posix.bind(server, &address_std.any, address_std.getOsSockLen());
-            try posix.listen(server, kernel_backlog);
 
-            var client_address_std = std.net.Address.initIp4(undefined, undefined);
-            var client_address_std_len = client_address_std.getOsSockLen();
-            try posix.getsockname(server, &client_address_std.any, &client_address_std_len);
-            const client_address = try stdx.SocketAddress.from_std(client_address_std);
-
-            const client = try self.io.open_socket_tcp(client_address.ip.family(), tcp_options);
+            const client = try self.io.open_socket_tcp(
+                ip_address_family(client_address),
+                tcp_options,
+            );
             defer self.io.close_socket(client);
 
             // Start the accept.
@@ -599,7 +605,11 @@ test "tick to wait" {
         }
 
         fn os_send(sock: posix.socket_t, buf: []const u8, flags: u32) !usize {
-            return posix.sendto(sock, buf, flags, null, 0);
+            const rc = posix.system.sendto(sock, buf.ptr, buf.len, flags, null, 0);
+            return switch (posix.errno(rc)) {
+                .SUCCESS => @intCast(rc),
+                else => error.Unexpected,
+            };
         }
     }.run_test();
 }
@@ -640,29 +650,15 @@ test "pipe data over socket" {
             };
             defer self.io.deinit();
 
-            self.server.fd = try self.io.open_socket_tcp(.IPv4, tcp_options);
+            self.server.fd = try self.io.open_socket_tcp(posix.AF.INET, tcp_options);
             defer self.io.close_socket(self.server.fd.?);
 
-            const address: stdx.SocketAddress = .{ .ip = .@"127.0.0.1", .port = 0 };
-            try posix.setsockopt(
+            const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+            const client_address = try self.io.listen(
                 self.server.fd.?,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
+                address,
+                .{ .backlog = 1 },
             );
-
-            const address_std = address.to_std();
-            try posix.bind(self.server.fd.?, &address_std.any, address_std.getOsSockLen());
-            try posix.listen(self.server.fd.?, 1);
-
-            var client_address_std = std.net.Address.initIp4(undefined, undefined);
-            var client_address_std_len = client_address_std.getOsSockLen();
-            try posix.getsockname(
-                self.server.fd.?,
-                &client_address_std.any,
-                &client_address_std_len,
-            );
-            const client_address = try stdx.SocketAddress.from_std(client_address_std);
 
             self.io.accept(
                 *Context,
@@ -672,7 +668,7 @@ test "pipe data over socket" {
                 self.server.fd.?,
             );
 
-            self.tx.socket.fd = try self.io.open_socket_tcp(.IPv4, tcp_options);
+            self.tx.socket.fd = try self.io.open_socket_tcp(posix.AF.INET, tcp_options);
             defer self.io.close_socket(self.tx.socket.fd.?);
 
             self.io.connect(
@@ -684,15 +680,7 @@ test "pipe data over socket" {
                 client_address,
             );
 
-            var tick: usize = 0xdeadbeef;
-            while (self.rx.transferred != self.rx.buffer.len) : (tick +%= 1) {
-                if (tick % 61 == 0) {
-                    const timeout_ns = tick % (10 * std.time.ns_per_ms);
-                    try self.io.run_for_ns(@as(u63, @intCast(timeout_ns)));
-                } else {
-                    try self.io.run();
-                }
-            }
+            try self.run_until_transferred();
 
             try testing.expect(self.server.fd != null);
             try testing.expect(self.tx.socket.fd != null);
@@ -702,6 +690,18 @@ test "pipe data over socket" {
             try testing.expectEqual(self.tx.transferred, buffer_size);
             try testing.expectEqual(self.rx.transferred, buffer_size);
             try testing.expect(std.mem.eql(u8, self.tx.buffer, self.rx.buffer));
+        }
+
+        fn run_until_transferred(self: *Context) !void {
+            var tick: usize = 0xdeadbeef;
+            while (self.rx.transferred != self.rx.buffer.len) : (tick +%= 1) {
+                if (tick % 61 == 0) {
+                    const timeout_ns = tick % (10 * std.time.ns_per_ms);
+                    try self.io.run_for_ns(@as(u63, @intCast(timeout_ns)));
+                } else {
+                    try self.io.run();
+                }
+            }
         }
 
         fn on_accept(

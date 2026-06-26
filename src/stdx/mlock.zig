@@ -33,7 +33,7 @@ fn memory_lock_allocated_linux() MemoryLockError!void {
     const MCL_CURRENT = 1; // Lock all currently mapped pages.
     const MCL_ONFAULT = 4; // Lock all pages faulted in (i.e. stack space).
     const result = os.linux.syscall1(.mlockall, MCL_CURRENT | MCL_ONFAULT);
-    switch (os.linux.E.init(result)) {
+    switch (os.linux.errno(result)) {
         .SUCCESS => return,
         .AGAIN => log.warn(mlockall_error, .{"some addresses could not be locked"}),
         .NOMEM => log.warn(mlockall_error, .{"memory would exceed RLIMIT_MEMLOCK"}),
@@ -51,42 +51,26 @@ fn memory_lock_allocated_windows(allocated_size: usize) MemoryLockError!void {
     // It would be difficult to gather the addresses of non-heap memory that is also
     // faulted in, such as the stack, globals, etc. SetProcessWorkingSetSize can be
     // used instead to lock all existing pages into memory to avoid swapping.
-    const process_handle = os.windows.kernel32.GetCurrentProcess();
+    const process_handle = os.windows.GetCurrentProcess();
     var working_set_min: os.windows.SIZE_T = 0;
     var working_set_max: os.windows.SIZE_T = 0;
 
-    if (stdx.windows.GetProcessWorkingSetSize(
+    if (stdx.windows.get_process_working_set_size(
         process_handle,
         &working_set_min,
         &working_set_max,
-    ) == os.windows.FALSE) {
+    ) == stdx.windows.FALSE) {
         working_set_min = allocated_size; // Count bytes allocated so far.
         working_set_min += 64 * MiB; // 64mb buffer room for stack/globals.
         working_set_max = working_set_min * 2; // Buffer room for new page faults.
     }
 
-    if (stdx.windows.SetProcessWorkingSetSize(
+    if (stdx.windows.set_process_working_set_size(
         process_handle,
         working_set_min,
         working_set_max,
-    ) == os.windows.FALSE) {
-        // From std.os.windows.unexpectedError():
-        const format_flags = os.windows.FORMAT_MESSAGE_FROM_SYSTEM |
-            os.windows.FORMAT_MESSAGE_IGNORE_INSERTS;
-
-        // 614 is the length of the longest windows error description.
-        var buffer: [614:0]os.windows.WCHAR = undefined;
-        const buffer_size = os.windows.kernel32.FormatMessageW(
-            format_flags,
-            null,
-            os.windows.kernel32.GetLastError(),
-            os.windows.LANG.NEUTRAL | (os.windows.SUBLANG.DEFAULT << 10),
-            &buffer,
-            buffer.len,
-            null,
-        );
-
-        log.warn(mlockall_error, .{std.unicode.fmtUtf16Le(buffer[0..buffer_size])});
+    ) == stdx.windows.FALSE) {
+        log.warn(mlockall_error, .{@tagName(os.windows.GetLastError())});
         return error.memory_not_locked;
     }
 }

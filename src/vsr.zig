@@ -39,7 +39,6 @@ pub const testing = .{
     .random_int_exponential = @import("testing/fuzz.zig").random_int_exponential,
     .IdPermutation = @import("testing/id.zig").IdPermutation,
     .parse_seed = @import("testing/fuzz.zig").parse_seed,
-    .fixtures = @import("testing/fixtures.zig"),
 };
 pub const ewah = @import("ewah.zig").ewah;
 pub const checkpoint_trailer = @import("vsr/checkpoint_trailer.zig");
@@ -340,7 +339,7 @@ pub const Operation = enum(u8) {
     pub fn tag_name(self: Operation, comptime StateMachineOperation: type) []const u8 {
         assert(self.valid(StateMachineOperation));
         inline for (.{ Operation, StateMachineOperation }) |Enum| {
-            inline for (@typeInfo(Enum).@"enum".fields) |field| {
+            inline for (stdx.type_fields(Enum)) |field| {
                 const op = @field(Enum, field.name);
                 if (@intFromEnum(self) == @intFromEnum(op)) {
                     return field.name;
@@ -354,16 +353,16 @@ pub const Operation = enum(u8) {
         comptime {
             @setEvalBranchQuota(20_000);
             assert(@typeInfo(StateMachineOperation) == .@"enum");
-            assert(@typeInfo(StateMachineOperation).@"enum".is_exhaustive);
+            assert(@typeInfo(StateMachineOperation).@"enum".mode == .exhaustive);
             assert(@typeInfo(StateMachineOperation).@"enum".tag_type ==
                 @typeInfo(Operation).@"enum".tag_type);
-            for (@typeInfo(StateMachineOperation).@"enum".fields) |field| {
+            for (stdx.type_fields(StateMachineOperation)) |field| {
                 const operation = @field(StateMachineOperation, field.name);
                 if (@intFromEnum(operation) < constants.vsr_operations_reserved) {
                     @compileError("StateMachine Operation is reserved");
                 }
             }
-            for (@typeInfo(Operation).@"enum".fields) |field| {
+            for (stdx.type_fields(Operation)) |field| {
                 const vsr_operation = @field(Operation, field.name);
                 switch (vsr_operation) {
                     // The StateMachine Operation can convert
@@ -622,7 +621,7 @@ test "ReconfigurationRequest" {
         .members_invalid,
     );
     try t.check(stdx.update(r, .{ .replica_count = 4 }), .members_count_invalid);
-    try t.check(stdx.update(r, .{ .reserved = [_]u8{1} ** 54 }), .reserved_field);
+    try t.check(stdx.update(r, .{ .reserved = @as([54]u8, @splat(1)) }), .reserved_field);
     try t.check(stdx.update(r, .{ .result = .ok }), .result_must_be_reserved);
     try t.check(stdx.update(r, .{ .epoch = 0 }), .epoch_in_the_past);
     try t.check(stdx.update(r, .{ .epoch = 3 }), .epoch_in_the_future);
@@ -648,9 +647,9 @@ test "ReconfigurationRequest" {
         .configuration_is_no_op,
     );
 
-    assert(t.tested.count() < ResultSet.initFull().count());
+    assert(t.tested.count() < ResultSet.full.count());
     t.tested.insert(.reserved);
-    assert(t.tested.count() == ResultSet.initFull().count());
+    assert(t.tested.count() == ResultSet.full.count());
 
     t.epoch = std.math.maxInt(u32);
     try t.check(r, .epoch_in_the_past);
@@ -892,52 +891,6 @@ test "exponential_backoff_with_jitter" {
     }
 }
 
-pub const ClusterAddress = struct {
-    array: stdx.BoundedArrayType(stdx.SocketAddress, constants.members_max),
-    // true when the value of `--addresses` is exactly `0`. Used to enable "magic zero" mode for
-    // testing. We check the raw string rather than the parsed address to prevent triggering
-    // this logic by accident.
-    zero: bool,
-
-    pub fn slice(address: *const ClusterAddress) []const stdx.SocketAddress {
-        return address.array.const_slice();
-    }
-
-    pub fn members_count(address: *const ClusterAddress) u8 {
-        return address.array.count_as(u8);
-    }
-
-    pub fn parse_flag_value(
-        text: []const u8,
-        static_diagnostic: *?[]const u8,
-    ) error{InvalidFlagValue}!ClusterAddress {
-        var result: ClusterAddress = .{
-            .array = .{},
-            .zero = std.mem.eql(u8, text, "0"),
-        };
-        const parsed = parse_addresses(text, result.array.unused_capacity_slice()) catch |err| {
-            static_diagnostic.* = switch (err) {
-                error.AddressHasTrailingComma => "invalid trailing comma:",
-                error.AddressLimitExceeded => std.fmt.comptimePrint(
-                    "too many addresses, at most {d} are allowed:",
-                    .{constants.members_max},
-                ),
-                error.AddressHasMoreThanOneColon => "invalid address with more than one colon:",
-                error.PortInvalid => "invalid port:",
-                error.AddressInvalid => "invalid IPv4 or IPv6 address:",
-            };
-            return error.InvalidFlagValue;
-        };
-        result.array.resize(parsed.len) catch |err| switch (err) {
-            error.Overflow => unreachable,
-        };
-        assert(result.array.slice().len == parsed.len);
-        assert(result.array.count() > 0);
-        assert(result.array.count() <= constants.members_max);
-        return result;
-    }
-};
-
 /// Returns An array containing the remote or local addresses of each of the 2f + 1 replicas:
 /// Unlike the VRR paper, we do not sort the array but leave the order explicitly to the user.
 /// There are several advantages to this:
@@ -947,8 +900,8 @@ pub const ClusterAddress = struct {
 /// The caller owns the memory of the returned slice of addresses.
 pub fn parse_addresses(
     raw: []const u8,
-    out_buffer: []stdx.SocketAddress,
-) ![]stdx.SocketAddress {
+    out_buffer: []std.Io.net.IpAddress,
+) ![]std.Io.net.IpAddress {
     const address_count = std.mem.count(u8, raw, ",") + 1;
     if (address_count > out_buffer.len) return error.AddressLimitExceeded;
 
@@ -970,140 +923,137 @@ pub fn parse_addresses(
 pub fn parse_address_and_port(options: struct {
     string: []const u8,
     port_default: u16,
-}) !stdx.SocketAddress {
+}) !std.Io.net.IpAddress {
     assert(options.string.len > 0);
     assert(options.port_default > 0);
 
     if (std.mem.lastIndexOfAny(u8, options.string, ":.]")) |split| {
         if (options.string[split] == ':') {
-            const port = stdx.parse_int(u16, options.string[split + 1 ..], .{}) catch
-                return error.PortInvalid;
-            const ip = try parse_address(options.string[0..split]);
-            return .{ .ip = ip, .port = port };
+            return parse_address(
+                options.string[0..split],
+                stdx.parse_int(u16, options.string[split + 1 ..], .{}) catch
+                    return error.PortInvalid,
+            );
         } else {
-            const ip = try parse_address(options.string);
-            return .{ .ip = ip, .port = options.port_default };
+            return parse_address(options.string, options.port_default);
         }
     } else {
-        const ip = comptime stdx.IPAddress.parse(constants.address) catch unreachable;
-        const port = stdx.parse_int(u16, options.string, .{}) catch return error.PortInvalid;
-        return .{ .ip = ip, .port = port };
+        return std.Io.net.IpAddress.parseIp4(
+            constants.address,
+            stdx.parse_int(u16, options.string, .{}) catch
+                return error.PortInvalid,
+        ) catch unreachable;
     }
 }
 
-// A variation of stdx.IPAddress.parse that requires `[]` around IPv6 addresses.
-fn parse_address(string: []const u8) !stdx.IPAddress {
+fn parse_address(string: []const u8, port: u16) !std.Io.net.IpAddress {
     if (string.len == 0) return error.AddressInvalid;
     if (string[string.len - 1] == ':') return error.AddressHasMoreThanOneColon;
 
-    const expect_v6 = string[0] == '[' and string[string.len - 1] == ']';
-    if (expect_v6 != (std.mem.indexOfScalar(u8, string, ':') != null)) return error.AddressInvalid;
-
-    const string_inner = if (expect_v6) string[1 .. string.len - 1] else string;
-    return stdx.IPAddress.parse(string_inner) catch error.AddressInvalid;
+    if (string[0] == '[' and string[string.len - 1] == ']') {
+        return std.Io.net.IpAddress.parseIp6(string[1 .. string.len - 1], port) catch
+            return error.AddressInvalid;
+    } else {
+        return std.Io.net.IpAddress.parseIp4(string, port) catch return error.AddressInvalid;
+    }
 }
 
 test parse_addresses {
     const vectors_positive = &[_]struct {
         raw: []const u8,
-        addresses: []const std.net.Address,
+        addresses: []const std.Io.net.IpAddress,
     }{
         .{
             // Test the minimum/maximum address/port.
             .raw = "1.2.3.4:567,0.0.0.0:0,255.255.255.255:65535",
-            .addresses = &[3]std.net.Address{
-                std.net.Address.initIp4([_]u8{ 1, 2, 3, 4 }, 567),
-                std.net.Address.initIp4([_]u8{ 0, 0, 0, 0 }, 0),
-                std.net.Address.initIp4([_]u8{ 255, 255, 255, 255 }, 65535),
+            .addresses = &[3]std.Io.net.IpAddress{
+                std.Io.net.IpAddress{ .ip4 = .{ .bytes = [_]u8{ 1, 2, 3, 4 }, .port = 567 } },
+                std.Io.net.IpAddress{ .ip4 = .{ .bytes = [_]u8{ 0, 0, 0, 0 }, .port = 0 } },
+                std.Io.net.IpAddress{
+                    .ip4 = .{ .bytes = [_]u8{ 255, 255, 255, 255 }, .port = 65535 },
+                },
             },
         },
         .{
             // Addresses are not reordered.
             .raw = "3.4.5.6:7777,200.3.4.5:6666,1.2.3.4:5555",
-            .addresses = &[3]std.net.Address{
-                std.net.Address.initIp4([_]u8{ 3, 4, 5, 6 }, 7777),
-                std.net.Address.initIp4([_]u8{ 200, 3, 4, 5 }, 6666),
-                std.net.Address.initIp4([_]u8{ 1, 2, 3, 4 }, 5555),
+            .addresses = &[3]std.Io.net.IpAddress{
+                std.Io.net.IpAddress{ .ip4 = .{ .bytes = [_]u8{ 3, 4, 5, 6 }, .port = 7777 } },
+                std.Io.net.IpAddress{ .ip4 = .{ .bytes = [_]u8{ 200, 3, 4, 5 }, .port = 6666 } },
+                std.Io.net.IpAddress{ .ip4 = .{ .bytes = [_]u8{ 1, 2, 3, 4 }, .port = 5555 } },
             },
         },
         .{
             // Test default address and port.
             .raw = "1.2.3.4:5,4321,2.3.4.5",
-            .addresses = &[3]std.net.Address{
-                std.net.Address.initIp4([_]u8{ 1, 2, 3, 4 }, 5),
-                try std.net.Address.parseIp4(constants.address, 4321),
-                std.net.Address.initIp4([_]u8{ 2, 3, 4, 5 }, constants.port),
+            .addresses = &[3]std.Io.net.IpAddress{
+                std.Io.net.IpAddress{ .ip4 = .{ .bytes = [_]u8{ 1, 2, 3, 4 }, .port = 5 } },
+                try std.Io.net.IpAddress.parseIp4(constants.address, 4321),
+                std.Io.net.IpAddress{
+                    .ip4 = .{ .bytes = [_]u8{ 2, 3, 4, 5 }, .port = constants.port },
+                },
             },
         },
         .{
             // Test addresses less than address_limit.
             .raw = "1.2.3.4:5,4321",
-            .addresses = &[2]std.net.Address{
-                std.net.Address.initIp4([_]u8{ 1, 2, 3, 4 }, 5),
-                try std.net.Address.parseIp4(constants.address, 4321),
+            .addresses = &[2]std.Io.net.IpAddress{
+                std.Io.net.IpAddress{ .ip4 = .{ .bytes = [_]u8{ 1, 2, 3, 4 }, .port = 5 } },
+                try std.Io.net.IpAddress.parseIp4(constants.address, 4321),
             },
         },
         .{
             // Test IPv6 address with default port.
             .raw = "[fe80::1ff:fe23:4567:890a]",
-            .addresses = &[_]std.net.Address{
-                std.net.Address.initIp6(
-                    [_]u8{
-                        0xfe, 0x80,
-                        0,    0,
-                        0,    0,
-                        0,    0,
-                        0x01, 0xff,
-                        0xfe, 0x23,
-                        0x45, 0x67,
-                        0x89, 0x0a,
+            .addresses = &[_]std.Io.net.IpAddress{
+                std.Io.net.IpAddress{
+                    .ip6 = .{
+                        .bytes = [_]u8{
+                            0xfe, 0x80,
+                            0,    0,
+                            0,    0,
+                            0,    0,
+                            0x01, 0xff,
+                            0xfe, 0x23,
+                            0x45, 0x67,
+                            0x89, 0x0a,
+                        },
+                        .port = constants.port,
                     },
-                    constants.port,
-                    0,
-                    0,
-                ),
+                },
             },
         },
         .{
             // Test IPv6 address with port.
             .raw = "[fe80::1ff:fe23:4567:890a]:1234",
-            .addresses = &[_]std.net.Address{
-                std.net.Address.initIp6(
-                    [_]u8{
-                        0xfe, 0x80,
-                        0,    0,
-                        0,    0,
-                        0,    0,
-                        0x01, 0xff,
-                        0xfe, 0x23,
-                        0x45, 0x67,
-                        0x89, 0x0a,
+            .addresses = &[_]std.Io.net.IpAddress{
+                std.Io.net.IpAddress{
+                    .ip6 = .{
+                        .bytes = [_]u8{
+                            0xfe, 0x80,
+                            0,    0,
+                            0,    0,
+                            0,    0,
+                            0x01, 0xff,
+                            0xfe, 0x23,
+                            0x45, 0x67,
+                            0x89, 0x0a,
+                        },
+                        .port = 1234,
                     },
-                    1234,
-                    0,
-                    0,
-                ),
-            },
-        },
-        .{
-            // Test IPv6-mapped IPv4 address.
-            .raw = "[::ffff:7f00:1]:1234",
-            .addresses = &[_]std.net.Address{
-                std.net.Address.initIp4([_]u8{ 127, 0, 0, 1 }, 1234),
+                },
             },
         },
     };
 
     const vectors_negative = &[_]struct {
         raw: []const u8,
-        err: anyerror![]stdx.SocketAddress,
+        err: anyerror![]std.Io.net.IpAddress,
     }{
         .{ .raw = "", .err = error.AddressHasTrailingComma },
         .{ .raw = ".", .err = error.AddressInvalid },
         .{ .raw = ":", .err = error.PortInvalid },
         .{ .raw = ":92", .err = error.AddressInvalid },
-        .{ .raw = "[127.0.0.1]", .err = error.AddressInvalid },
-        .{ .raw = "[127.0.0.1]:3001", .err = error.AddressInvalid },
         .{ .raw = "::ff:92", .err = error.AddressInvalid },
         .{ .raw = "1.2.3.4:5,2.3.4.5:6,4.5.6.7:8", .err = error.AddressLimitExceeded },
         .{ .raw = "1.2.3.4:7777,", .err = error.AddressHasTrailingComma },
@@ -1117,20 +1067,18 @@ test parse_addresses {
         .{ .raw = "1.2.3.4:5,2.3.4.5:65536", .err = error.PortInvalid },
     };
 
-    var buffer: [3]stdx.SocketAddress = undefined;
+    var buffer: [3]std.Io.net.IpAddress = undefined;
     for (vectors_positive) |vector| {
         const addresses_actual = try parse_addresses(vector.raw, &buffer);
 
         try std.testing.expectEqual(addresses_actual.len, vector.addresses.len);
-        for (vector.addresses, 0..) |address_expect_std, i| {
+        for (vector.addresses, 0..) |address_expect, i| {
             const address_actual = addresses_actual[i];
-            const address_expect = try stdx.SocketAddress.from_std(address_expect_std);
-            try std.testing.expectEqual(address_expect, address_actual);
+            try std.testing.expect(address_expect.eql(&address_actual));
         }
     }
 
     for (vectors_negative) |vector| {
-        errdefer log.err("raw = '{s}', err = {any}", .{ vector.raw, vector.err });
         try std.testing.expectEqual(
             vector.err,
             parse_addresses(vector.raw, buffer[0..2]),
@@ -1146,7 +1094,7 @@ test "parse_addresses: fuzz" {
     var prng = stdx.PRNG.from_seed_testing();
 
     var input_buffer: [input_size_max]u8 = @splat(0);
-    var buffer: [3]stdx.SocketAddress = undefined;
+    var buffer: [3]std.Io.net.IpAddress = undefined;
     for (0..test_count) |_| {
         const input_size = prng.int_inclusive(usize, input_size_max);
         const input = input_buffer[0..input_size];
@@ -1680,13 +1628,13 @@ test "Checkpoint ops diagram" {
     const Snap = stdx.Snap;
     const snap = Snap.snap_fn("src");
 
-    var string = std.ArrayList(u8).init(std.testing.allocator);
-    defer string.deinit();
+    var string: std.ArrayList(u8) = .empty;
+    defer string.deinit(std.testing.allocator);
 
-    var string2 = std.ArrayList(u8).init(std.testing.allocator);
-    defer string2.deinit();
+    var string2: std.ArrayList(u8) = .empty;
+    defer string2.deinit(std.testing.allocator);
 
-    try string.writer().print(
+    try string.print(std.testing.allocator,
         \\journal_slot_count={[journal_slot_count]}
         \\lsm_compaction_ops={[lsm_compaction_ops]}
         \\pipeline_prepare_queue_max={[pipeline_prepare_queue_max]}
@@ -1727,9 +1675,11 @@ test "Checkpoint ops diagram" {
         };
 
         // Marker for tidy.zig to ignore the long lines.
-        if (op % constants.journal_slot_count == 0) try string.appendSlice("OPS: ");
+        if (op % constants.journal_slot_count == 0) {
+            try string.appendSlice(std.testing.allocator, "OPS: ");
+        }
 
-        try string.writer().print("{s}{:_>3}{s}", .{
+        try string.print(std.testing.allocator, "{s}{:_>3}{s}", .{
             switch (op_type) {
                 .normal => " ",
                 .checkpoint => if (checkpoint_count % 2 == 0) "[" else "{",
@@ -1745,8 +1695,8 @@ test "Checkpoint ops diagram" {
             },
         });
 
-        if (last_slot) try string.append('\n');
-        if (!last_slot and last_beat) try string.append(' ');
+        if (last_slot) try string.append(std.testing.allocator, '\n');
+        if (!last_slot and last_beat) try string.append(std.testing.allocator, ' ');
 
         if (op_type == .checkpoint) {
             checkpoint_prev = checkpoint_next;

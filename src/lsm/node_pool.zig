@@ -35,7 +35,7 @@ pub fn NodePoolType(comptime _node_size: u32, comptime _node_alignment: u13) typ
                 .free = undefined,
             };
             const size = node_size * node_count;
-            pool.buffer = try allocator.alignedAlloc(u8, node_alignment, size);
+            pool.buffer = try allocator.alignedAlloc(u8, .fromByteUnits(node_alignment), size);
             errdefer allocator.free(pool.buffer);
 
             pool.free = try std.bit_set.DynamicBitSetUnmanaged.initFull(allocator, node_count);
@@ -96,7 +96,7 @@ fn TestContextType(comptime node_size: usize, comptime node_alignment: u12) type
         prng: *stdx.PRNG,
         sentinel: u64,
         node_pool: TestPool,
-        node_map: std.AutoArrayHashMap(TestPool.Node, u64),
+        node_map: std.AutoHashMap(TestPool.Node, u64),
 
         acquires: u64 = 0,
         releases: u64 = 0,
@@ -115,7 +115,7 @@ fn TestContextType(comptime node_size: usize, comptime node_alignment: u12) type
             errdefer context.node_pool.deinit(testing.allocator);
             @memset(mem.bytesAsSlice(u64, context.node_pool.buffer), context.sentinel);
 
-            context.node_map = std.AutoArrayHashMap(TestPool.Node, u64).init(testing.allocator);
+            context.node_map = std.AutoHashMap(TestPool.Node, u64).init(testing.allocator);
             errdefer context.node_map.deinit();
         }
 
@@ -179,9 +179,14 @@ fn TestContextType(comptime node_size: usize, comptime node_alignment: u12) type
         fn release(context: *TestContext) !void {
             if (context.node_map.count() == 0) return;
 
-            const index = context.prng.index(context.node_map.keys());
-            const node = context.node_map.keys()[index];
-            const id = context.node_map.values()[index];
+            const index = context.prng.int_inclusive(usize, context.node_map.count() - 1);
+            var iterator = context.node_map.iterator();
+            var i: usize = 0;
+            const entry = while (iterator.next()) |entry| : (i += 1) {
+                if (i == index) break entry;
+            } else unreachable;
+            const node = entry.key_ptr.*;
+            const id = entry.value_ptr.*;
 
             // Verify that the data of this node has not been overwritten since we acquired it.
             for (mem.bytesAsSlice(u64, node)) |word| {
@@ -190,7 +195,7 @@ fn TestContextType(comptime node_size: usize, comptime node_alignment: u12) type
 
             @memset(mem.bytesAsSlice(u64, node), context.sentinel);
             context.node_pool.release(node);
-            context.node_map.swapRemoveAt(index);
+            _ = context.node_map.remove(node);
 
             context.releases += 1;
         }

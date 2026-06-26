@@ -92,8 +92,8 @@ pub const TimeOS = struct {
         //
         // https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-kuser_shared_data
         // https://www.geoffchappell.com/studies/windows/km/ntoskrnl/inc/api/ntexapi_x/kuser_shared_data/index.htm
-        const qpc = os.windows.QueryPerformanceCounter();
-        const qpf = os.windows.QueryPerformanceFrequency();
+        const qpc = stdx.windows.query_performance_counter();
+        const qpf = stdx.windows.query_performance_frequency();
 
         // 10Mhz (1 qpc tick every 100ns) is a common QPF on modern systems.
         // We can optimize towards this by converting to ns via a single multiply.
@@ -140,9 +140,11 @@ pub const TimeOS = struct {
         //
         // For more detail and why CLOCK_MONOTONIC_RAW is even worse than CLOCK_MONOTONIC, see
         // https://github.com/ziglang/zig/pull/933#discussion_r656021295.
-        const ts: posix.timespec = posix.clock_gettime(posix.CLOCK.BOOTTIME) catch {
-            @panic("CLOCK_BOOTTIME required");
-        };
+        var ts: std.os.linux.timespec = undefined;
+        switch (std.os.linux.clock_gettime(.BOOTTIME, &ts)) {
+            0 => {},
+            else => @panic("CLOCK_BOOTTIME required"),
+        }
         return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
     }
 
@@ -159,7 +161,7 @@ pub const TimeOS = struct {
         // https://github.com/ziglang/zig/pull/22871
         assert(is_windows);
         var ft: os.windows.FILETIME = undefined;
-        stdx.windows.GetSystemTimePreciseAsFileTime(&ft);
+        stdx.windows.get_system_time_precise_as_file_time(&ft);
         const ft64 = (@as(u64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
 
         // FileTime is in units of 100 nanoseconds
@@ -170,7 +172,19 @@ pub const TimeOS = struct {
 
     fn realtime_unix() i64 {
         assert(is_darwin or is_linux);
-        const ts: posix.timespec = posix.clock_gettime(posix.CLOCK.REALTIME) catch unreachable;
+        const ts = if (is_linux) blk: {
+            var ts_linux: std.os.linux.timespec = undefined;
+            assert(std.os.linux.clock_gettime(.REALTIME, &ts_linux) == 0);
+            break :blk .{ .sec = ts_linux.sec, .nsec = ts_linux.nsec };
+        } else blk: {
+            const clock_gettime = @extern(
+                *const fn (c_int, *std.c.timespec) callconv(.c) c_int,
+                .{ .name = "clock_gettime", .library_name = "c" },
+            );
+            var ts_darwin: std.c.timespec = undefined;
+            assert(clock_gettime(0, &ts_darwin) == 0); // CLOCK_REALTIME
+            break :blk .{ .sec = ts_darwin.sec, .nsec = ts_darwin.nsec };
+        };
         return @as(i64, ts.sec) * std.time.ns_per_s + ts.nsec;
     }
 
