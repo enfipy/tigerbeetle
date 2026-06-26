@@ -59,7 +59,7 @@ fn memory_lock_allocated_windows(allocated_size: usize) MemoryLockError!void {
         process_handle,
         &working_set_min,
         &working_set_max,
-    ) == stdx.windows.FALSE) {
+    ) == os.windows.BOOL.FALSE) {
         working_set_min = allocated_size; // Count bytes allocated so far.
         working_set_min += 64 * MiB; // 64mb buffer room for stack/globals.
         working_set_max = working_set_min * 2; // Buffer room for new page faults.
@@ -69,7 +69,7 @@ fn memory_lock_allocated_windows(allocated_size: usize) MemoryLockError!void {
         process_handle,
         working_set_min,
         working_set_max,
-    ) == stdx.windows.FALSE) {
+    ) == os.windows.BOOL.FALSE) {
         log.warn(mlockall_error, .{@tagName(os.windows.GetLastError())});
         return error.memory_not_locked;
     }

@@ -393,9 +393,7 @@ test "event" {
         fn trigger_event(self: *Context) void {
             assert(std.Thread.getCurrentId() != self.main_thread_id);
             while (self.count < events_count) {
-                {
-                    sleep_ns(delay + 1);
-                }
+                sleep_ns(delay + 1);
 
                 // Triggering the event:
                 self.io.event_trigger(self.event, &self.event_completion);
@@ -676,19 +674,6 @@ test "pipe data over socket" {
                 client_address,
             );
 
-            try self.run_until_transferred();
-
-            try testing.expect(self.server.fd != null);
-            try testing.expect(self.tx.socket.fd != null);
-            try testing.expect(self.rx.socket.fd != null);
-            self.io.close_socket(self.rx.socket.fd.?);
-
-            try testing.expectEqual(self.tx.transferred, buffer_size);
-            try testing.expectEqual(self.rx.transferred, buffer_size);
-            try testing.expect(std.mem.eql(u8, self.tx.buffer, self.rx.buffer));
-        }
-
-        fn run_until_transferred(self: *Context) !void {
             var tick: usize = 0xdeadbeef;
             while (self.rx.transferred != self.rx.buffer.len) : (tick +%= 1) {
                 if (tick % 61 == 0) {
@@ -698,6 +683,15 @@ test "pipe data over socket" {
                     try self.io.run();
                 }
             }
+
+            try testing.expect(self.server.fd != null);
+            try testing.expect(self.tx.socket.fd != null);
+            try testing.expect(self.rx.socket.fd != null);
+            self.io.close_socket(self.rx.socket.fd.?);
+
+            try testing.expectEqual(self.tx.transferred, buffer_size);
+            try testing.expectEqual(self.rx.transferred, buffer_size);
+            try testing.expect(std.mem.eql(u8, self.tx.buffer, self.rx.buffer));
         }
 
         fn on_accept(

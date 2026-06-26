@@ -1,9 +1,6 @@
 const std = @import("std");
 const windows = std.os.windows;
 
-pub const FALSE = windows.BOOL.FALSE;
-pub const TRUE = windows.BOOL.TRUE;
-
 pub const GENERIC_READ: windows.DWORD = 0x80000000;
 pub const GENERIC_WRITE: windows.DWORD = 0x40000000;
 pub const SYNCHRONIZE: windows.DWORD = 0x00100000;
@@ -27,10 +24,6 @@ pub const FILE_NO_INTERMEDIATE_BUFFERING: windows.DWORD = 0x00000008;
 pub const FILE_DIRECTORY_FILE: windows.ULONG = 0x00000001;
 pub const FILE_NON_DIRECTORY_FILE: windows.ULONG = 0x00000040;
 pub const FILE_OPEN_REPARSE_POINT: windows.ULONG = 0x00200000;
-pub const SO_UPDATE_ACCEPT_CONTEXT: u32 = windows.ws2_32.SO.UPDATE_ACCEPT_CONTEXT;
-pub const SO_UPDATE_CONNECT_CONTEXT: u32 = windows.ws2_32.SO.UPDATE_CONNECT_CONTEXT;
-pub const SOL_SOCKET: c_int = windows.ws2_32.SOL.SOCKET;
-
 pub const WinsockError = enum(u16) {
     WSA_INVALID_HANDLE = 6,
     WSA_INVALID_PARAMETER = 87,
@@ -140,8 +133,6 @@ pub const set_environment_variable_w = @extern(
     *const fn (windows.LPCWSTR, ?windows.LPCWSTR) callconv(.winapi) windows.BOOL,
     .{ .name = "SetEnvironmentVariableW", .library_name = "kernel32" },
 );
-
-pub const create_process_w = windows.kernel32.CreateProcessW;
 
 const flush_file_buffers_raw = @extern(
     *const fn (windows.HANDLE) callconv(.winapi) windows.BOOL,

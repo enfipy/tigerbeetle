@@ -50,12 +50,6 @@ cwd: std.Io.Dir,
 cwd_stack: [cwd_stack_max]std.Io.Dir,
 cwd_stack_count: usize,
 
-// Zig uses file-descriptor oriented APIs in the standard library, with the one exception being
-// ChildProcess's cwd, which is required to be a path, rather than a file descriptor. This buffer
-// is used to materialize the path to cwd when spawning a new process.
-//   <https://github.com/ziglang/zig/issues/5190>
-cwd_path_buffer: [std.fs.max_path_bytes]u8 = undefined,
-
 env: std.process.Environ.Map,
 
 /// True if the process is run in CI (the CI env var is set)
@@ -581,24 +575,6 @@ fn exec_inner(
             destination.* = try shell.arena.allocator().dupe(u8, stream[0..len_without_newline]);
         }
     }
-}
-
-fn write_stdin(process_io: std.Io, child: *std.process.Child, stdin: []const u8) !std.Thread {
-    assert(child.stdin != null);
-    defer child.stdin = null;
-
-    // Spawn a thread to avoid deadlock between us writing to stdin and reading from stdout.
-    return try std.Thread.spawn(
-        .{},
-        struct {
-            fn write_stdin(io: std.Io, destination: std.Io.File, source: []const u8) void {
-                defer destination.close(io);
-
-                destination.writeAll(source) catch {};
-            }
-        }.write_stdin,
-        .{ process_io, child.stdin.?, stdin },
-    );
 }
 
 /// Run the command and return its status, stderr and stdout.

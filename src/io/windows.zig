@@ -398,18 +398,18 @@ pub const IO = struct {
                             op.listen_socket,
                             &op.overlapped.raw,
                             &transferred,
-                            stdx.windows.FALSE, // Don't wait.
+                            os.windows.BOOL.FALSE, // Don't wait.
                             &flags,
                         );
                     };
 
                     // Return the socket if we succeed in accepting.
-                    if (rc != stdx.windows.FALSE) {
+                    if (rc != os.windows.BOOL.FALSE) {
                         // Enables getsockopt, setsockopt, getsockname, getpeername.
                         stdx.windows.setsockopt_null(
                             op.client_socket.?,
-                            stdx.windows.SOL_SOCKET,
-                            stdx.windows.SO_UPDATE_ACCEPT_CONTEXT,
+                            os.windows.ws2_32.SOL.SOCKET,
+                            os.windows.ws2_32.SO.UPDATE_ACCEPT_CONTEXT,
                         ) catch unreachable;
 
                         return op.client_socket.?;
@@ -505,7 +505,7 @@ pub const IO = struct {
                                 op.socket,
                                 &op.overlapped.raw,
                                 &transferred,
-                                stdx.windows.FALSE, // Don't wait.
+                                os.windows.BOOL.FALSE, // Don't wait.
                                 &flags,
                             );
                         }
@@ -582,12 +582,12 @@ pub const IO = struct {
                     };
 
                     // Return if we succeeded in connecting.
-                    if (rc != stdx.windows.FALSE) {
+                    if (rc != os.windows.BOOL.FALSE) {
                         // Enables getsockopt, setsockopt, getsockname, getpeername.
                         stdx.windows.setsockopt_null(
                             op.socket,
-                            stdx.windows.SOL_SOCKET,
-                            stdx.windows.SO_UPDATE_CONNECT_CONTEXT,
+                            os.windows.ws2_32.SOL.SOCKET,
+                            os.windows.ws2_32.SO.UPDATE_CONNECT_CONTEXT,
                         ) catch unreachable;
 
                         return;
@@ -697,7 +697,7 @@ pub const IO = struct {
                                 op.socket,
                                 &op.overlapped.raw,
                                 &transferred,
-                                stdx.windows.FALSE, // Don't wait.
+                                os.windows.BOOL.FALSE, // Don't wait.
                                 &flags,
                             );
                         }
@@ -722,13 +722,13 @@ pub const IO = struct {
                                 os.windows.BOOL,
                                 os.windows.BOOL.fromBool(false),
                             ),
-                            0 => stdx.windows.TRUE,
+                            0 => os.windows.BOOL.TRUE,
                             else => unreachable,
                         };
                     };
 
                     // Return bytes transferred on success.
-                    if (rc != stdx.windows.FALSE)
+                    if (rc != os.windows.BOOL.FALSE)
                         return transferred;
 
                     return switch (stdx.windows.wsa_get_last_error()) {
@@ -811,7 +811,7 @@ pub const IO = struct {
                                 op.socket,
                                 &op.overlapped.raw,
                                 &transferred,
-                                stdx.windows.FALSE, // Don't wait.
+                                os.windows.BOOL.FALSE, // Don't wait.
                                 &flags,
                             );
                         }
@@ -836,13 +836,13 @@ pub const IO = struct {
                                 os.windows.BOOL,
                                 os.windows.BOOL.fromBool(false),
                             ),
-                            0 => stdx.windows.TRUE,
+                            0 => os.windows.BOOL.TRUE,
                             else => unreachable,
                         };
                     };
 
                     // Return bytes received on success.
-                    if (rc != stdx.windows.FALSE)
+                    if (rc != os.windows.BOOL.FALSE)
                         return transferred;
 
                     return switch (stdx.windows.wsa_get_last_error()) {
@@ -1488,7 +1488,7 @@ pub const IO = struct {
             &lock_overlapped,
         );
 
-        if (locked == stdx.windows.FALSE) {
+        if (locked == os.windows.BOOL.FALSE) {
             return switch (os.windows.GetLastError()) {
                 .IO_PENDING => error.WouldBlock,
                 else => |err| os.windows.unexpectedError(err),
@@ -1505,7 +1505,7 @@ pub const IO = struct {
 
         // Mark the moved file pointer (start + size) as the physical EOF.
         const allocated = stdx.windows.set_end_of_file(handle);
-        if (allocated == stdx.windows.FALSE) {
+        if (allocated == os.windows.BOOL.FALSE) {
             const err = os.windows.GetLastError();
             return os.windows.unexpectedError(err);
         }

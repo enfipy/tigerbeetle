@@ -106,7 +106,7 @@ fn format_slice_hex_lower(bytes: []const u8, writer: *std.Io.Writer) std.Io.Writ
 fn posix_ftruncate(fd: posix.fd_t, length: u64) !void {
     if (builtin.target.os.tag == .windows) {
         try stdx.windows.set_file_pointer_ex(fd, length);
-        if (stdx.windows.set_end_of_file(fd) == stdx.windows.FALSE) {
+        if (stdx.windows.set_end_of_file(fd) == os.windows.BOOL.FALSE) {
             return std.os.windows.unexpectedError(std.os.windows.GetLastError());
         }
         return;
@@ -1655,33 +1655,33 @@ pub const MultiversionOS = struct {
                     stdx.windows.set_environment_variable_w(
                         comptime std.unicode.utf8ToUtf16LeStringLiteral(TB_MULTIVERSION_PIPE),
                         pipe_name,
-                    ) != stdx.windows.FALSE,
+                    ) != os.windows.BOOL.FALSE,
                 );
                 assert(
                     stdx.windows.set_environment_variable_w(
                         comptime std.unicode.utf8ToUtf16LeStringLiteral(TB_MULTIVERSION_EXE),
                         self.args_envp.exe_path_w,
-                    ) != stdx.windows.FALSE,
+                    ) != os.windows.BOOL.FALSE,
                 );
 
                 // If bInheritHandles is FALSE, and dwFlags inside STARTUPINFOW doesn't have
                 // STARTF_USESTDHANDLES set, the stdin/stdout/stderr handles of the parent will
                 // be passed through to the child.
-                if (stdx.windows.create_process_w(
+                if (std.os.windows.kernel32.CreateProcessW(
                     self.args_envp.target_path_w,
                     cmd_line_w,
                     null,
                     null,
-                    stdx.windows.FALSE,
+                    os.windows.BOOL.FALSE,
                     .{ .create_unicode_environment = true },
                     null,
                     null,
                     &lp_startup_info,
                     &lp_process_information,
-                ) == stdx.windows.FALSE) return error.CreateProcessWFailed;
+                ) == os.windows.BOOL.FALSE) return error.CreateProcessWFailed;
                 const child: std.os.windows.HANDLE = lp_process_information.hProcess;
 
-                if (stdx.windows.connect_named_pipe(pipe, null) == stdx.windows.FALSE and
+                if (stdx.windows.connect_named_pipe(pipe, null) == os.windows.BOOL.FALSE and
                     std.os.windows.GetLastError() != .PIPE_CONNECTED)
                 {
                     log.err("ConnectNamedPipe: {}", .{std.os.windows.GetLastError()});
@@ -1695,9 +1695,9 @@ pub const MultiversionOS = struct {
                     child,
                     &me,
                     0,
-                    stdx.windows.FALSE,
+                    os.windows.BOOL.FALSE,
                     std.os.windows.DUPLICATE_SAME_ACCESS,
-                ) != stdx.windows.TRUE) {
+                ) != os.windows.BOOL.TRUE) {
                     log.err("DuplicateHandle: {}", .{std.os.windows.GetLastError()});
                     return error.DuplicateHandleFailed;
                 }

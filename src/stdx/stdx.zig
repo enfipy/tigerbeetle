@@ -32,6 +32,8 @@ pub const radix_sort = @import("radix.zig").sort;
 pub const Instant = @import("time_units.zig").Instant;
 pub const Duration = @import("time_units.zig").Duration;
 pub const InstantUnix = @import("time_units.zig").InstantUnix;
+pub const fmt_duration = @import("time_units.zig").fmt_duration;
+pub const fmt_duration_signed = @import("time_units.zig").fmt_duration_signed;
 
 const net = @import("./net.zig");
 pub const IPAddress = net.IPAddress;
@@ -1100,51 +1102,6 @@ pub fn comptime_slice(comptime slice: anytype, comptime len: usize) []const @Typ
 pub fn fmt_int_size_bin_exact(comptime value: u64) std.fmt.Alt(u64, format_int_size_bin_exact) {
     comptime assert(value < 1024 or value % 1024 == 0);
     return .{ .data = value };
-}
-
-pub fn fmt_duration(ns: u64) std.fmt.Alt(u64, format_duration) {
-    return .{ .data = ns };
-}
-
-pub fn fmt_duration_signed(ns: i64) std.fmt.Alt(i64, format_duration_signed) {
-    return .{ .data = ns };
-}
-
-fn format_duration(ns: u64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    if (ns < std.time.ns_per_us) {
-        return writer.print("{}ns", .{ns});
-    } else if (ns < std.time.ns_per_ms) {
-        return format_duration_decimal(writer, ns, std.time.ns_per_us, "us");
-    } else if (ns < std.time.ns_per_s) {
-        return format_duration_decimal(writer, ns, std.time.ns_per_ms, "ms");
-    } else {
-        return format_duration_decimal(writer, ns, std.time.ns_per_s, "s");
-    }
-}
-
-fn format_duration_signed(ns: i64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    const magnitude: u64 = if (ns < 0) negative: {
-        try writer.writeByte('-');
-        break :negative @as(u64, @intCast(-(ns + 1))) + 1;
-    } else @intCast(ns);
-
-    return format_duration(magnitude, writer);
-}
-
-fn format_duration_decimal(
-    writer: *std.Io.Writer,
-    ns: u64,
-    unit: u64,
-    suffix: []const u8,
-) std.Io.Writer.Error!void {
-    const whole = ns / unit;
-    const fractional = (ns % unit) * 1000 / unit;
-
-    if (fractional == 0) {
-        return writer.print("{}{s}", .{ whole, suffix });
-    } else {
-        return writer.print("{}.{:0>3}{s}", .{ whole, fractional, suffix });
-    }
 }
 
 fn format_int_size_bin_exact(value: u64, writer: *std.Io.Writer) std.Io.Writer.Error!void {
