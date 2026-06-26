@@ -27,7 +27,6 @@ pub const FILE_NO_INTERMEDIATE_BUFFERING: windows.DWORD = 0x00000008;
 pub const FILE_DIRECTORY_FILE: windows.ULONG = 0x00000001;
 pub const FILE_NON_DIRECTORY_FILE: windows.ULONG = 0x00000040;
 pub const FILE_OPEN_REPARSE_POINT: windows.ULONG = 0x00200000;
-pub const FILE_BEGIN: windows.DWORD = 0;
 pub const SO_UPDATE_ACCEPT_CONTEXT: u32 = windows.ws2_32.SO.UPDATE_ACCEPT_CONTEXT;
 pub const SO_UPDATE_CONNECT_CONTEXT: u32 = windows.ws2_32.SO.UPDATE_CONNECT_CONTEXT;
 pub const SOL_SOCKET: c_int = windows.ws2_32.SOL.SOCKET;
@@ -198,17 +197,6 @@ pub const create_file_w = @extern(
 pub const get_system_time_precise_as_file_time = @extern(
     *const fn (*windows.FILETIME) callconv(.winapi) void,
     .{ .name = "GetSystemTimePreciseAsFileTime", .library_name = "kernel32" },
-);
-
-pub const get_process_times = @extern(
-    *const fn (
-        windows.HANDLE,
-        *windows.FILETIME,
-        *windows.FILETIME,
-        *windows.FILETIME,
-        *windows.FILETIME,
-    ) callconv(.winapi) windows.BOOL,
-    .{ .name = "GetProcessTimes", .library_name = "kernel32" },
 );
 
 pub const set_process_working_set_size = @extern(

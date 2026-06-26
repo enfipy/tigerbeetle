@@ -12,32 +12,6 @@ const TimeOS = @import("../time.zig").TimeOS;
 const buffer_limit = @import("../io.zig").buffer_limit;
 const DirectIO = @import("../io.zig").DirectIO;
 
-const Kevent = extern struct {
-    ident: usize,
-    filter: i16,
-    flags: u16,
-    fflags: u32,
-    data: isize,
-    udata: usize,
-};
-
-const kqueue_raw = @extern(
-    *const fn () callconv(.c) c_int,
-    .{ .name = "kqueue", .library_name = "c" },
-);
-
-const kevent_raw = @extern(
-    *const fn (
-        c_int,
-        [*]const Kevent,
-        c_int,
-        [*]Kevent,
-        c_int,
-        ?*const posix.timespec,
-    ) callconv(.c) c_int,
-    .{ .name = "kevent", .library_name = "c" },
-);
-
 fn posix_ftruncate(fd: posix.fd_t, length: u64) !void {
     const signed_length: i64 = std.math.cast(i64, length) orelse return error.FileTooBig;
     const ftruncate = if (posix.lfs64_abi) posix.system.ftruncate64 else posix.system.ftruncate;
@@ -51,11 +25,6 @@ fn posix_ftruncate(fd: posix.fd_t, length: u64) !void {
         else => |err| return stdx.unexpected_errno("ftruncate", err),
     };
 }
-
-const socket_raw = @extern(
-    *const fn (c_int, c_int, c_int) callconv(.c) c_int,
-    .{ .name = "socket", .library_name = "c" },
-);
 
 const DarwinConnectError = error{
     WouldBlock,
@@ -75,27 +44,6 @@ const DarwinRecvError = error{
     ConnectionResetByPeer,
     ConnectionTimedOut,
 } || posix.UnexpectedError;
-
-const flock_raw = @extern(
-    *const fn (posix.fd_t, c_int) callconv(.c) c_int,
-    .{ .name = "flock", .library_name = "c" },
-);
-
-fn connect_raw(
-    socket: posix.fd_t,
-    address: *const std.c.sockaddr,
-    address_len: posix.socklen_t,
-) c_int {
-    return posix.system.connect(socket, address, address_len);
-}
-
-fn recv_raw(socket: posix.fd_t, buffer: [*]u8, len: usize, flags: c_int) isize {
-    return posix.system.recv(socket, buffer, len, flags);
-}
-
-fn sendto_raw(socket: posix.fd_t, buffer: [*]const u8, len: usize, flags: u32) isize {
-    return posix.system.sendto(socket, buffer, len, flags, null, 0);
-}
 
 fn socket_error(socket: posix.fd_t) DarwinConnectError!void {
     var value: c_int = undefined;
@@ -136,7 +84,7 @@ const KeventError = error{
 } || posix.UnexpectedError;
 
 fn kqueue() (error{ProcessFdQuotaExceeded} || posix.UnexpectedError)!posix.fd_t {
-    const result = kqueue_raw();
+    const result = std.c.kqueue();
     return switch (posix.errno(result)) {
         .SUCCESS => result,
         .MFILE => error.ProcessFdQuotaExceeded,
@@ -146,11 +94,11 @@ fn kqueue() (error{ProcessFdQuotaExceeded} || posix.UnexpectedError)!posix.fd_t 
 
 fn kevent(
     kq: posix.fd_t,
-    change_list: []const Kevent,
-    event_list: []Kevent,
+    change_list: []const posix.Kevent,
+    event_list: []posix.Kevent,
     timeout: ?*const posix.timespec,
 ) KeventError!usize {
-    const result = kevent_raw(
+    const result = std.c.kevent(
         kq,
         change_list.ptr,
         @intCast(change_list.len),
@@ -256,7 +204,7 @@ pub const IO = struct {
     }
 
     fn flush(self: *IO, wait_for_completions: bool) !void {
-        var events: [256]Kevent = undefined;
+        var events: [256]posix.Kevent = undefined;
 
         // Check timeouts and fill events with completions in io_pending
         // (they will be submitted through kevent).
@@ -312,7 +260,7 @@ pub const IO = struct {
         self.stats.window.time_callbacks.ns += elapsed.ns;
     }
 
-    fn flush_io(self: *IO, events: []Kevent) usize {
+    fn flush_io(self: *IO, events: []posix.Kevent) usize {
         for (events, 0..) |*event, flushed| {
             const completion = self.io_pending.pop() orelse return flushed;
 
@@ -659,7 +607,7 @@ pub const IO = struct {
                         else => blk: {
                             const sockaddr, const sockaddr_len =
                                 stdx.ip_address_to_sockaddr(op.address);
-                            break :blk switch (posix.errno(connect_raw(
+                            break :blk switch (posix.errno(posix.system.connect(
                                 op.socket,
                                 &sockaddr.any,
                                 sockaddr_len,
@@ -873,7 +821,7 @@ pub const IO = struct {
             struct {
                 fn do_operation(op: anytype) RecvError!usize {
                     while (true) {
-                        const rc = recv_raw(op.socket, op.buf, op.len, 0);
+                        const rc = posix.system.recv(op.socket, op.buf, op.len, 0);
                         return switch (posix.errno(rc)) {
                             .SUCCESS => @intCast(rc),
                             .INTR => continue,
@@ -924,7 +872,7 @@ pub const IO = struct {
                     // Use `sendto` instead of `send` because UDP sockets may return
                     // ConnectionRefused.
                     while (true) {
-                        const rc = sendto_raw(op.socket, op.buf, op.len, 0);
+                        const rc = posix.system.sendto(op.socket, op.buf, op.len, 0, null, 0);
                         return switch (posix.errno(rc)) {
                             .SUCCESS => @intCast(rc),
                             .INTR => continue,
@@ -1072,7 +1020,7 @@ pub const IO = struct {
         const event = self.event_id;
         assert(event != INVALID_EVENT);
 
-        var kev = mem.zeroes([1]Kevent);
+        var kev = mem.zeroes([1]posix.Kevent);
         kev[0].ident = event;
         kev[0].filter = posix.system.EVFILT.USER;
         kev[0].flags = posix.system.EV.ADD | posix.system.EV.ENABLE | posix.system.EV.CLEAR;
@@ -1113,7 +1061,7 @@ pub const IO = struct {
     pub fn event_trigger(self: *IO, event: Event, completion: *Completion) void {
         assert(event != INVALID_EVENT);
 
-        var kev = mem.zeroes([1]Kevent);
+        var kev = mem.zeroes([1]posix.Kevent);
         kev[0].ident = event;
         kev[0].filter = posix.system.EVFILT.USER;
         kev[0].fflags = posix.system.NOTE.TRIGGER;
@@ -1126,7 +1074,7 @@ pub const IO = struct {
     pub fn close_event(self: *IO, event: Event) void {
         assert(event != INVALID_EVENT);
 
-        var kev = mem.zeroes([1]Kevent);
+        var kev = mem.zeroes([1]posix.Kevent);
         kev[0].ident = event;
         kev[0].filter = posix.system.EVFILT.USER;
         kev[0].flags = posix.system.EV.DELETE;
@@ -1161,7 +1109,7 @@ pub const IO = struct {
     }
 
     fn open_socket(self: *IO, family: u32, sock_type: u32, protocol: u32) !socket_t {
-        const fd = socket_raw(
+        const fd = posix.system.socket(
             @intCast(family),
             @intCast(sock_type),
             @intCast(protocol),
@@ -1356,7 +1304,7 @@ pub const IO = struct {
 
         // Obtain an advisory exclusive lock that works only if all processes actually use flock().
         // LOCK_NB means that we want to fail the lock without waiting if another process has it.
-        const locked = flock_raw(fd, posix.LOCK.EX | posix.LOCK.NB);
+        const locked = posix.system.flock(fd, posix.LOCK.EX | posix.LOCK.NB);
         if (locked != 0) switch (posix.errno(locked)) {
             .AGAIN => {
                 if (purpose == .inspect) {

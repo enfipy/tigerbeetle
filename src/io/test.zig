@@ -22,13 +22,6 @@ pub const tcp_options: IO.TCPOptions = .{
     .nodelay = false,
 };
 
-fn ip_address_family(address: std.Io.net.IpAddress) u32 {
-    return switch (address) {
-        .ip4 => posix.AF.INET,
-        .ip6 => posix.AF.INET6,
-    };
-}
-
 fn sleep_ns(nanoseconds: u64) void {
     var request: posix.timespec = .{
         .sec = @intCast(@divFloor(nanoseconds, std.time.ns_per_s)),
@@ -197,10 +190,10 @@ test "accept/connect/send/receive" {
             const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
             const kernel_backlog = 1;
 
-            const server = try io.open_socket_tcp(ip_address_family(address), tcp_options);
+            const server = try io.open_socket_tcp(stdx.ip_address_family(address), tcp_options);
             defer io.close_socket(server);
 
-            const client = try io.open_socket_tcp(ip_address_family(address), tcp_options);
+            const client = try io.open_socket_tcp(stdx.ip_address_family(address), tcp_options);
             defer io.close_socket(client);
 
             const client_address = try io.listen(
@@ -491,7 +484,10 @@ test "tick to wait" {
             const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
             const kernel_backlog = 1;
 
-            const server = try self.io.open_socket_tcp(ip_address_family(address), tcp_options);
+            const server = try self.io.open_socket_tcp(
+                stdx.ip_address_family(address),
+                tcp_options,
+            );
             defer self.io.close_socket(server);
 
             const client_address = try self.io.listen(
@@ -501,7 +497,7 @@ test "tick to wait" {
             );
 
             const client = try self.io.open_socket_tcp(
-                ip_address_family(client_address),
+                stdx.ip_address_family(client_address),
                 tcp_options,
             );
             defer self.io.close_socket(client);
