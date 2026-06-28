@@ -155,7 +155,10 @@ pub fn linux_ip_link_loopback() !void {
     comptime assert(builtin.os.tag == .linux);
 
     // Open a netlink socket with the NETLINK.ROUTE protocol.
-    const sock = try linux_socket(linux.AF.NETLINK, linux.SOCK.RAW, linux.NETLINK.ROUTE);
+    const sock: linux.fd_t = @intCast(try linux_netlink_result(
+        linux.socket(linux.AF.NETLINK, linux.SOCK.RAW, linux.NETLINK.ROUTE),
+        "failed to create netlink socket",
+    ));
     defer linux_close(sock);
 
     const addr = linux.sockaddr.nl{
@@ -163,7 +166,10 @@ pub fn linux_ip_link_loopback() !void {
         .pid = 0,
         .groups = 0,
     };
-    try linux_bind(sock, @ptrCast(&addr), @sizeOf(@TypeOf(addr)));
+    _ = try linux_netlink_result(
+        linux.bind(sock, @ptrCast(&addr), @sizeOf(@TypeOf(addr))),
+        "failed to bind netlink socket",
+    );
 
     // Netlink definitions.
     const nlmsghdr = linux.nlmsghdr;
@@ -218,12 +224,18 @@ pub fn linux_ip_link_loopback() !void {
     };
 
     const msg_buf = std.mem.asBytes(&msg);
-    const sent_len = try linux_sendto(sock, msg_buf, 0, null, 0);
+    const sent_len = try linux_netlink_result(
+        linux.sendto(sock, msg_buf.ptr, msg_buf.len, 0, null, 0),
+        "failed to send netlink message",
+    );
     assert(sent_len == msg.hdr.len);
 
     var ack: Response = undefined;
     const ack_buf = std.mem.asBytes(&ack);
-    const ack_len = try linux_recv(sock, ack_buf, 0);
+    const ack_len = try linux_netlink_result(
+        linux.recvfrom(sock, ack_buf.ptr, ack_buf.len, 0, null, null),
+        "failed to receive netlink ack",
+    );
 
     assert(ack_len == @sizeOf(Response));
     assert(ack.hdr.type == .ERROR);
@@ -235,50 +247,11 @@ pub fn linux_ip_link_loopback() !void {
     }
 }
 
-fn linux_socket(domain: u32, socket_type: u32, protocol: u32) !linux.fd_t {
-    const rc = linux.socket(domain, socket_type, protocol);
-    switch (linux.errno(rc)) {
-        .SUCCESS => return @intCast(rc),
-        else => |err| {
-            log.err("failed to create netlink socket: {}", .{err});
-            return error.IpLink;
-        },
-    }
-}
-
-fn linux_bind(fd: linux.fd_t, addr: *const linux.sockaddr, len: linux.socklen_t) !void {
-    switch (linux.errno(linux.bind(fd, addr, len))) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("failed to bind netlink socket: {}", .{err});
-            return error.IpLink;
-        },
-    }
-}
-
-fn linux_sendto(
-    fd: linux.fd_t,
-    buffer: []const u8,
-    flags: u32,
-    addr: ?*const linux.sockaddr,
-    addr_len: linux.socklen_t,
-) !usize {
-    const rc = linux.sendto(fd, buffer.ptr, buffer.len, flags, addr, addr_len);
+fn linux_netlink_result(rc: usize, comptime message: []const u8) !usize {
     switch (linux.errno(rc)) {
         .SUCCESS => return rc,
         else => |err| {
-            log.err("failed to send netlink message: {}", .{err});
-            return error.IpLink;
-        },
-    }
-}
-
-fn linux_recv(fd: linux.fd_t, buffer: []u8, flags: u32) !usize {
-    const rc = linux.recvfrom(fd, buffer.ptr, buffer.len, flags, null, null);
-    switch (linux.errno(rc)) {
-        .SUCCESS => return rc,
-        else => |err| {
-            log.err("failed to receive netlink ack: {}", .{err});
+            log.err(message ++ ": {}", .{err});
             return error.IpLink;
         },
     }

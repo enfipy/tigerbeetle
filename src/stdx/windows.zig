@@ -63,10 +63,7 @@ pub const WinsockError = enum(u16) {
     _,
 };
 
-pub const WSABUF = extern struct {
-    len: windows.ULONG,
-    buf: [*]u8,
-};
+pub const WSABUF = windows.AFD.WSABUF(.@"var");
 
 pub const OVERLAPPED = extern struct {
     Internal: usize,
