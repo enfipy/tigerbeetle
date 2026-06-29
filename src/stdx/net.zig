@@ -418,7 +418,9 @@ test IPAddress {
 
 test "IPAddress: from_v4" {
     const v4 = IPAddress.from_v4(.{ 1, 2, 3, 4 });
-    const v4_std = std.net.Address.initIp4(.{ 1, 2, 3, 4 }, 0);
+    const v4_std: std.Io.net.IpAddress = .{
+        .ip4 = .{ .bytes = .{ 1, 2, 3, 4 }, .port = 0 },
+    };
     try expectEqual(v4, (try SocketAddress.from_std(v4_std)).ip);
 
     try snap(@src(),
