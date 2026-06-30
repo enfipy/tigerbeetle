@@ -341,7 +341,7 @@ fn on_completion(
 
                     const packet = packet_extern.cast();
                     const request_buffer: []align(@alignOf(Event)) u8 =
-                        @constCast(@alignCast(packet.slice()));
+                        @alignCast(@constCast(packet.slice()));
                     // Trying to reallocate the request buffer instead of allocating a new one.
                     // This is optimal for create_* operations.
                     const reply_buffer: []align(@alignOf(Result)) u8 = global_allocator.realloc(
@@ -497,7 +497,7 @@ fn decode_array(comptime Event: type, env: c.napi_env, array: c.napi_value, even
             AccountBalance,
             QueryFilter,
             => {
-                inline for (std.meta.fields(Event)) |field| {
+                inline for (stdx.type_fields(Event)) |field| {
                     const value: field.type = switch (@typeInfo(field.type)) {
                         .@"struct" => |info| @bitCast(try @field(
                             translate,
@@ -544,7 +544,7 @@ fn encode_array(comptime Result: type, env: c.napi_env, results: []const Result)
             "Failed to create " ++ @typeName(Result) ++ " object.",
         );
 
-        inline for (std.meta.fields(Result)) |field| {
+        inline for (stdx.type_fields(Result)) |field| {
             const FieldInt = switch (@typeInfo(field.type)) {
                 .@"struct" => |info| info.backing_integer.?,
                 .@"enum" => |info| info.tag_type,

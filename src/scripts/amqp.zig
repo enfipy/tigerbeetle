@@ -59,7 +59,7 @@ pub fn main(_: *Shell, gpa: std.mem.Allocator, cli_args: CLIArgs) !void {
     }
 }
 
-fn run_protocol_test(gpa: std.mem.Allocator, options: struct { host: stdx.SocketAddress }) !void {
+fn run_protocol_test(gpa: std.mem.Allocator, options: struct { host: std.Io.net.IpAddress }) !void {
     var context: AmqpContext = undefined;
     try context.init(gpa);
     defer context.deinit(gpa);
@@ -269,7 +269,7 @@ fn run_protocol_test(gpa: std.mem.Allocator, options: struct { host: stdx.Socket
 
 fn run_serialization_test(
     gpa: std.mem.Allocator,
-    options: struct { host: stdx.SocketAddress },
+    options: struct { host: std.Io.net.IpAddress },
 ) !void {
     var context: AmqpContext = undefined;
     try context.init(gpa);
@@ -372,7 +372,7 @@ fn run_cdc_test(
     gpa: std.mem.Allocator,
     options: struct {
         transfer_count: u32,
-        host: stdx.SocketAddress,
+        host: std.Io.net.IpAddress,
     },
 ) !void {
     var amqp_context: AmqpContext = undefined;
@@ -417,12 +417,12 @@ fn run_cdc_test(
         .{
             .tigerbeetle = tmp_beetle.tigerbeetle_exe,
             .addresses = tmp_beetle.port_str,
-            .port = options.host.port,
+            .port = options.host.getPort(),
             .queue = queue,
             .idle_interval_ms = 1,
         },
     );
-    defer _ = cdc_job.kill() catch undefined;
+    defer cdc_job.kill(shell.io);
 
     // Use the `benchmark` command to generate data.
     assert(options.transfer_count > 0);
@@ -439,9 +439,9 @@ fn run_cdc_test(
         },
     );
     defer {
-        const term = benchmark.wait() catch unreachable;
-        assert(term == .Exited);
-        assert(term.Exited == 0);
+        const term = benchmark.wait(shell.io) catch unreachable;
+        assert(term == .exited);
+        assert(term.exited == 0);
     }
 
     // TODO: Improvements:
@@ -463,7 +463,7 @@ fn run_cdc_test(
             for (0..10) |attempt| {
                 if (attempt > 0) {
                     // Waiting for events:
-                    std.time.sleep(500 * std.time.ns_per_ms);
+                    try std.Io.sleep(shell.io, .fromMilliseconds(500), .boot);
                 }
                 const events = try vsr_context.get_change_events(timestamp_previous + 1);
                 if (events.len > 0) break :events events;
@@ -502,7 +502,7 @@ fn run_cdc_test(
                 for (0..10) |attempt| {
                     if (attempt > 0) {
                         // Give the CDC job some time to finish publishing the messages.
-                        std.time.sleep(500 * std.time.ns_per_ms);
+                        try std.Io.sleep(shell.io, .fromMilliseconds(500), .boot);
                     }
                     if (amqp_context.get_message(.{
                         .queue = queue,
@@ -538,7 +538,7 @@ fn run_cdc_test(
 fn run_timeout_test(
     gpa: std.mem.Allocator,
     options: struct {
-        host: stdx.SocketAddress,
+        host: std.Io.net.IpAddress,
     },
 ) !void {
     var amqp_context: AmqpContext = undefined;
@@ -584,23 +584,23 @@ fn run_timeout_test(
         .{
             .tigerbeetle = tmp_beetle.tigerbeetle_exe,
             .addresses = tmp_beetle.port_str,
-            .port = options.host.port,
+            .port = options.host.getPort(),
             .queue = queue,
             .idle_interval_ms = 1,
             .tigerbeetle_timeout_seconds = 1,
         },
     );
-    defer _ = cdc_job.kill() catch undefined;
+    defer cdc_job.kill(shell.io);
 
     const timer = time.monotonic();
 
     // Kills the TigerBeetle cluster and waits for the CDC job to time out.
     tmp_beetle.deinit(gpa);
-    const result = try cdc_job.wait();
+    const result = try cdc_job.wait(shell.io);
 
     const elapsed = timer.elapsed(time.monotonic());
 
-    try testing.expectEqual(@as(u8, 1), result.Exited);
+    try testing.expectEqual(@as(u8, 1), result.exited);
     try testing.expect(elapsed.to_ms() > 1000);
 }
 
@@ -648,7 +648,7 @@ const AmqpContext = struct {
         self.io.deinit();
     }
 
-    pub fn connect(self: *AmqpContext, host: stdx.SocketAddress) !void {
+    pub fn connect(self: *AmqpContext, host: std.Io.net.IpAddress) !void {
         assert(!self.busy);
         self.busy = true;
         try self.client.connect(&callback, .{
@@ -788,7 +788,7 @@ const VSRContext = struct {
         self.message_pool = try MessagePool.init(gpa, .client);
         errdefer self.message_pool.deinit(gpa);
 
-        const address: stdx.SocketAddress = .{ .ip = .@"127.0.0.1", .port = port };
+        const address = try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
         self.client = try Client.init(
             gpa,
             time,
@@ -910,7 +910,7 @@ const TmpRabbitMQ = struct {
     const rabbitmq4 = "rabbitmq:4";
 
     id: u128,
-    host: stdx.SocketAddress,
+    host: std.Io.net.IpAddress,
     process: std.process.Child,
 
     pub fn init(
@@ -935,9 +935,9 @@ const TmpRabbitMQ = struct {
                 .image = options.image,
             },
         );
-        errdefer _ = process.kill() catch unreachable;
+        errdefer process.kill(shell.io);
 
-        const host: stdx.SocketAddress = host: {
+        const host: std.Io.net.IpAddress = host: {
             const stdout = try try_execute(shell, "docker port {id}", .{ .id = id });
             // The command `docker port` outputs multiple lines:
             // 5672/tcp -> 0.0.0.0:32773
@@ -948,7 +948,7 @@ const TmpRabbitMQ = struct {
                 // Last index of `:`, because ipv6 can be `[::]:port`.
                 const index = std.mem.lastIndexOfScalar(u8, host, ':') orelse continue;
                 const port = try stdx.parse_int(u16, host[index + 1 ..], .{});
-                break :host .{ .ip = .@"127.0.0.1", .port = port };
+                break :host try std.Io.net.IpAddress.parseIp4("127.0.0.1", port);
             }
             try testing.expect(false);
             unreachable;
@@ -976,8 +976,8 @@ const TmpRabbitMQ = struct {
             "docker stop {id}",
             .{ .id = self.id },
         );
-        const term = self.process.wait() catch unreachable;
-        assert(term == .Exited);
+        const term = self.process.wait(shell.io) catch unreachable;
+        assert(term == .exited);
     }
 };
 
@@ -1021,13 +1021,13 @@ fn try_execute(
     comptime cmd: []const u8,
     cmd_args: anytype,
 ) ![]const u8 {
-    var exec_result: ?std.process.Child.RunResult = null;
+    var exec_result: ?std.process.RunResult = null;
     const attempt_max = 15;
     for (0..attempt_max) |attempt| {
-        if (attempt > 0) std.time.sleep(1 * std.time.ns_per_s);
+        if (attempt > 0) try std.Io.sleep(shell.io, .fromSeconds(1), .boot);
         exec_result = try shell.exec_raw(cmd, cmd_args);
         switch (exec_result.?.term) {
-            .Exited => |code| if (code == 0) return exec_result.?.stdout,
+            .exited => |code| if (code == 0) return exec_result.?.stdout,
             else => {},
         }
     }

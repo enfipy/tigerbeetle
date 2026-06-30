@@ -21,7 +21,7 @@ port: u16,
 /// For convenience, the same port pre-converted to string.
 port_str: []const u8,
 
-tmp_dir: std.testing.TmpDir,
+tmp_dir_path: []const u8,
 
 // A separate thread for reading process stderr without blocking it. The process must be terminated
 // before stopping the StreamReader.
@@ -51,28 +51,45 @@ pub fn init(
         //
         // TODO: just run `zig build run` unconditionally here, when that doesn't do spurious
         // rebuilds.
-        _ = shell.project_root.statFile(tigerbeetle_exe) catch {
+        _ = shell.project_root.statFile(shell.io, tigerbeetle_exe, .{}) catch {
             log.info("building TigerBeetle", .{});
             try shell.exec_zig("build", .{});
 
-            _ = try shell.project_root.statFile(tigerbeetle_exe);
+            _ = try shell.project_root.statFile(shell.io, tigerbeetle_exe, .{});
         };
 
-        from_source_path = try shell.project_root.realpathAlloc(gpa, tigerbeetle_exe);
+        const from_source_path_z = try shell.project_root.realPathFileAlloc(
+            shell.io,
+            tigerbeetle_exe,
+            gpa,
+        );
+        defer gpa.free(from_source_path_z);
+
+        from_source_path = try gpa.dupe(u8, from_source_path_z);
     }
 
-    const tigerbeetle_exe: []const u8 = try gpa.dupe(
-        u8,
-        options.prebuilt orelse from_source_path.?,
-    );
+    const tigerbeetle_exe: []const u8 = if (options.prebuilt) |prebuilt|
+        if (std.fs.path.isAbsolute(prebuilt))
+            try gpa.dupe(u8, prebuilt)
+        else blk: {
+            const prebuilt_z = try std.Io.Dir.cwd().realPathFileAlloc(
+                shell.io,
+                prebuilt,
+                gpa,
+            );
+            defer gpa.free(prebuilt_z);
+
+            break :blk try gpa.dupe(u8, prebuilt_z);
+        }
+    else
+        try gpa.dupe(u8, from_source_path.?);
     errdefer gpa.free(tigerbeetle_exe);
     assert(std.fs.path.isAbsolute(tigerbeetle_exe));
 
-    var tmp_dir = std.testing.tmpDir(.{});
-    errdefer tmp_dir.cleanup();
-
-    const tmp_dir_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(tmp_dir_path);
+    const tmp_dir_path_shell = try shell.create_tmp_dir();
+    const tmp_dir_path = try gpa.dupe(u8, tmp_dir_path_shell);
+    errdefer gpa.free(tmp_dir_path);
+    errdefer std.Io.Dir.cwd().deleteTree(shell.io, tmp_dir_path) catch {};
 
     const data_file: []const u8 = try std.fs.path.join(gpa, &.{ tmp_dir_path, "0_0.tigerbeetle" });
     defer gpa.free(data_file);
@@ -86,9 +103,9 @@ pub fn init(
     // Pass `--addresses=0` to let the OS pick a port for us.
     var process = try shell.spawn(
         .{
-            .stdin_behavior = .Pipe,
-            .stdout_behavior = .Pipe,
-            .stderr_behavior = .Pipe,
+            .stdin_behavior = .pipe,
+            .stdout_behavior = .pipe,
+            .stderr_behavior = .pipe,
         },
         "{tigerbeetle} start --development={development} --addresses=0 {data_file}",
         .{
@@ -100,9 +117,9 @@ pub fn init(
 
     errdefer {
         if (reader_maybe) |reader| {
-            reader.stop(gpa, &process); // Will log stderr.
+            reader.stop(shell.io, gpa, &process); // Will log stderr.
         } else {
-            _ = process.kill() catch unreachable;
+            process.kill(shell.io);
         }
     }
 
@@ -116,9 +133,9 @@ pub fn init(
         );
 
         var port_buf: [std.fmt.count("{}\n", .{std.math.maxInt(u16)})]u8 = undefined;
-        const port_buf_len = try process.stdout.?.readAll(&port_buf);
+        const port_buf_len = try std.posix.read(process.stdout.?.handle, &port_buf);
         if (port_buf_len == 0) {
-            exit_status = try process.wait();
+            exit_status = try process.wait(shell.io);
             return error.NoPort;
         }
 
@@ -132,7 +149,7 @@ pub fn init(
         .tigerbeetle_exe = tigerbeetle_exe,
         .port = port,
         .port_str = port_str,
-        .tmp_dir = tmp_dir,
+        .tmp_dir_path = tmp_dir_path,
         .stderr_reader = reader_maybe.?,
         .process = process,
     };
@@ -142,11 +159,11 @@ pub fn deinit(tb: *TmpTigerBeetle, gpa: std.mem.Allocator) void {
     if (tb.stderr_reader.log_stderr.load(.seq_cst) == .on_early_exit) {
         tb.stderr_reader.log_stderr.store(.no, .seq_cst);
     }
-    assert(tb.process.term == null);
-    tb.stderr_reader.stop(gpa, &tb.process);
-    assert(tb.process.term != null);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    tb.stderr_reader.stop(io, gpa, &tb.process);
     gpa.free(tb.port_str);
-    tb.tmp_dir.cleanup();
+    std.Io.Dir.cwd().deleteTree(io, tb.tmp_dir_path) catch {};
+    gpa.free(tb.tmp_dir_path);
     gpa.free(tb.tigerbeetle_exe);
 }
 
@@ -159,9 +176,9 @@ const StreamReader = struct {
 
     log_stderr: LogStderr = LogStderr.init(.on_early_exit),
     thread: std.Thread,
-    file: std.fs.File,
+    file: std.Io.File,
 
-    pub fn start(gpa: std.mem.Allocator, file: std.fs.File) !*StreamReader {
+    pub fn start(gpa: std.mem.Allocator, file: std.Io.File) !*StreamReader {
         var result = try gpa.create(StreamReader);
         errdefer gpa.destroy(result);
 
@@ -174,7 +191,12 @@ const StreamReader = struct {
         return result;
     }
 
-    pub fn stop(self: *StreamReader, gpa: std.mem.Allocator, process: *std.process.Child) void {
+    pub fn stop(
+        self: *StreamReader,
+        io: std.Io,
+        gpa: std.mem.Allocator,
+        process: *std.process.Child,
+    ) void {
         // Shutdown sequence is tricky:
         // 1. Terminate the process, but _don't_ close our side of the pipe.
         // 2. Wait until the thread exits.
@@ -182,13 +204,13 @@ const StreamReader = struct {
         // TODO(Zig) https://github.com/ziglang/zig/issues/16820
         if (builtin.os.tag == .windows) {
             const exit_code = 1;
-            std.os.windows.TerminateProcess(process.id, exit_code) catch {};
+            std.os.windows.TerminateProcess(process.id.?, exit_code) catch {};
         } else {
-            std.posix.kill(process.id, std.posix.SIG.TERM) catch {};
+            std.posix.kill(process.id.?, std.posix.SIG.TERM) catch {};
         }
         assert(process.stderr != null);
         self.thread.join();
-        _ = process.wait() catch unreachable;
+        _ = process.wait(io) catch unreachable;
         assert(process.stderr == null);
         gpa.destroy(self);
     }
@@ -197,11 +219,16 @@ const StreamReader = struct {
         // NB: Zig allocators are not thread safe, so use mmap directly to hold process' stderr.
         const allocator = std.heap.page_allocator;
 
-        var buffer = std.ArrayList(u8).init(allocator);
-        defer buffer.deinit();
+        var buffer: std.ArrayList(u8) = .empty;
+        defer buffer.deinit(allocator);
 
         // NB: don't use `readAllAlloc` to get partial output in case of errors.
-        reader.file.reader().readAllArrayList(&buffer, 100 * MiB) catch {};
+        var chunk: [4096]u8 = undefined;
+        while (buffer.items.len < 100 * MiB) {
+            const size = std.posix.read(reader.file.handle, &chunk) catch break;
+            if (size == 0) break;
+            buffer.appendSlice(allocator, chunk[0..size]) catch break;
+        }
         switch (reader.log_stderr.load(.seq_cst)) {
             .on_early_exit, .yes => {
                 log.err("tigerbeetle stderr:\n++++\n{s}\n++++", .{buffer.items});

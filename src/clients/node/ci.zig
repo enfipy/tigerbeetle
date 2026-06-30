@@ -77,7 +77,7 @@ pub fn validate_release_package(shell: *Shell, gpa: std.mem.Allocator, options: 
     release: []const u8,
 }) !void {
     const tmp_dir = try shell.create_tmp_dir();
-    defer shell.cwd.deleteTree(tmp_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(shell.io, tmp_dir) catch {};
 
     const published_url = try shell.fmt(
         "https://registry.npmjs.org/tigerbeetle-node/-/tigerbeetle-node-{s}.tgz",
@@ -85,7 +85,7 @@ pub fn validate_release_package(shell: *Shell, gpa: std.mem.Allocator, options: 
     );
     const published_tgz = try shell.fmt("{s}/published.tgz", .{tmp_dir});
     const published_dir = try shell.fmt("{s}/published", .{tmp_dir});
-    try shell.cwd.makePath(published_dir);
+    try shell.cwd.createDirPath(shell.io, published_dir);
 
     log.info("validating node package {s}", .{published_url});
 
@@ -101,7 +101,7 @@ pub fn validate_release_package(shell: *Shell, gpa: std.mem.Allocator, options: 
             },
         );
         switch (result.term) {
-            .Exited => |code| if (code == 0) break,
+            .exited => |code| if (code == 0) break,
             else => {},
         }
 
@@ -111,19 +111,20 @@ pub fn validate_release_package(shell: *Shell, gpa: std.mem.Allocator, options: 
             return error.DownloadAttemptsExceeded;
         }
         // Wait before next attempt.
-        std.Thread.sleep(5 * std.time.ns_per_s);
+        try std.Io.sleep(shell.io, .fromNanoseconds(5 * std.time.ns_per_s), .boot);
     }
 
     const local_path_relative = try shell.fmt(
         "zig-out/dist/node/tigerbeetle-node-{s}.tgz",
         .{options.release},
     );
-    const local_tgz = try shell.cwd.realpathAlloc(
-        shell.arena.allocator(),
+    const local_tgz = try shell.cwd.realPathFileAlloc(
+        shell.io,
         local_path_relative,
+        shell.arena.allocator(),
     );
     const local_dir = try shell.fmt("{s}/local", .{tmp_dir});
-    try shell.cwd.makePath(local_dir);
+    try shell.cwd.createDirPath(shell.io, local_dir);
 
     // npm repacks the tarball on publish with a different compression, so we extract and diff.
     try shell.exec(
@@ -178,7 +179,12 @@ fn validate_npm_metadata(
     gpa: std.mem.Allocator,
     package_json_path: []const u8,
 ) !void {
-    const package_json = try shell.cwd.readFileAlloc(gpa, package_json_path, 4 * 1024);
+    const package_json = try shell.cwd.readFileAlloc(
+        shell.io,
+        package_json_path,
+        gpa,
+        .limited(4 * 1024),
+    );
     defer gpa.free(package_json);
 
     const parsed = try std.json.parseFromSlice(

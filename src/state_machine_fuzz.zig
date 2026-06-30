@@ -276,11 +276,7 @@ test "int_edge_biased" {
         }
 
         inline for (1..129) |bits| {
-            const IntType = @Type(.{ .int = .{
-                .signedness = .unsigned,
-                .bits = bits,
-            } });
-            const max = std.math.maxInt(IntType);
+            const max = std.math.maxInt(u128) >> (128 - bits);
             if (int == max) {
                 found_max_int[bits] = true;
             }

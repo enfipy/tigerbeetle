@@ -100,7 +100,7 @@ pub const IO = struct {
         comptime callback: anytype,
         completion: *Completion,
         comptime operation_tag: std.meta.Tag(Operation),
-        operation_data: std.meta.TagPayload(Operation, operation_tag),
+        operation_data: stdx.tag_payload(Operation, operation_tag),
         comptime OperationImpl: type,
     ) void {
         const on_complete_fn = struct {
@@ -312,7 +312,10 @@ pub const IO = struct {
         }
     }
 
-    pub fn aof_blocking_write_all(self: *IO, fd: fd_t, source: []const u8) posix.WriteError!void {
+    pub const AOFError = common.AOFError;
+    pub const AOFStat = common.AOFStat;
+
+    pub fn aof_blocking_write_all(self: *IO, fd: fd_t, source: []const u8) AOFError!void {
         assert(fd < self.files.len);
 
         const file_index = @as(u32, @intCast(fd));
@@ -327,14 +330,12 @@ pub const IO = struct {
         file.offset += @as(u32, @intCast(source.len));
     }
 
-    pub const PReadError = posix.PReadError;
-
     pub fn aof_blocking_close(self: *IO, fd: fd_t) void {
         assert(fd < self.files.len);
         self.files[fd].closed = true;
     }
 
-    pub fn aof_blocking_pread_all(self: *IO, fd: fd_t, target: []u8, offset: u64) PReadError!usize {
+    pub fn aof_blocking_pread_all(self: *IO, fd: fd_t, target: []u8, offset: u64) AOFError!usize {
         assert(fd < self.files.len);
 
         const file_index = @as(u32, @intCast(fd));
@@ -347,11 +348,11 @@ pub const IO = struct {
         return target.len;
     }
 
-    pub fn aof_blocking_stat(_: *IO, _: []const u8) std.fs.Dir.StatFileError!std.fs.File.Stat {
+    pub fn aof_blocking_stat(_: *IO, _: []const u8) AOFError!AOFStat {
         return error.Unexpected;
     }
 
-    pub fn aof_blocking_fstat(_: *IO, _: fd_t) std.fs.Dir.StatError!std.fs.File.Stat {
+    pub fn aof_blocking_fstat(_: *IO, _: fd_t) AOFError!AOFStat {
         return error.Unexpected;
     }
 

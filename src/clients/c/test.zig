@@ -8,8 +8,8 @@ const stdx = tb_client.vsr.stdx;
 const constants = @import("../../constants.zig");
 const tb = tb_client.vsr.tigerbeetle;
 
-const Mutex = std.Thread.Mutex;
-const Condition = std.Thread.Condition;
+const Mutex = std.Io.Mutex;
+const Condition = std.Io.Condition;
 
 fn RequestContextType(comptime request_size_max: comptime_int) type {
     return struct {
@@ -57,24 +57,24 @@ fn RequestContextType(comptime request_size_max: comptime_int) type {
 // Notifies the main thread when all pending requests are completed.
 const Completion = struct {
     pending: usize,
-    mutex: Mutex = .{},
-    cond: Condition = .{},
+    mutex: Mutex = .init,
+    cond: Condition = .init,
 
     pub fn complete(self: *Completion) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(testing.io);
+        defer self.mutex.unlock(testing.io);
 
         assert(self.pending > 0);
         self.pending -= 1;
-        self.cond.signal();
+        self.cond.signal(testing.io);
     }
 
     pub fn wait_pending(self: *Completion) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(testing.io);
+        defer self.mutex.unlock(testing.io);
 
         while (self.pending > 0)
-            self.cond.wait(&self.mutex);
+            self.cond.waitUncancelable(testing.io, &self.mutex);
     }
 };
 
@@ -269,7 +269,16 @@ test "tb_client init" {
 
     // More addresses than "replicas_max" should return "TB_STATUS_ADDRESS_LIMIT_EXCEEDED":
     try assert_status(
-        ("3000," ** constants.replicas_max) ++ "3001",
+        blk: {
+            var buf: [5 * constants.replicas_max + 4]u8 = undefined;
+            var i: usize = 0;
+            for (0..constants.replicas_max) |_| {
+                stdx.copy_disjoint(.inexact, u8, buf[i..][0..5], "3000,");
+                i += 5;
+            }
+            stdx.copy_disjoint(.inexact, u8, buf[i..][0..4], "3001");
+            break :blk &buf;
+        },
         error.AddressLimitExceeded,
     );
 

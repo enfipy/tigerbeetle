@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const exports = @import("tb_client.zig").exports;
-const c = @cImport(@cInclude("tb_client.h"));
+const c = @import("tb_client_h");
 const stdx = @import("stdx");
 
 fn to_snakecase(comptime input: []const u8) []const u8 {
@@ -61,7 +61,7 @@ test "valid tb_client.h" {
                 }
 
                 // Compare the enum int values in C to the enum int values in Zig.
-                for (std.meta.fields(ty)) |field| {
+                for (stdx.type_fields(ty)) |field| {
                     if (std.mem.startsWith(u8, field.name, "deprecated_")) continue;
                     const c_enum_field = stdx.to_case(to_snakecase(field.name), .UPPER_CASE);
                     const c_value = @field(c, c_enum_prefix ++ c_enum_field);
@@ -77,7 +77,7 @@ test "valid tb_client.h" {
                     const c_enum_prefix = c_type_name[0 .. prefix_offset + 1];
                     assert(c_type == c_uint);
 
-                    for (std.meta.fields(ty)) |field| {
+                    for (stdx.type_fields(ty)) |field| {
                         if (!std.mem.eql(u8, field.name, "padding")) {
                             // Get the bit value in the C enum.
                             const c_enum_field =
@@ -99,14 +99,14 @@ test "valid tb_client.h" {
                     }
                     assert(@alignOf(ty) == @alignOf(c_type));
 
-                    for (std.meta.fields(ty)) |field| {
+                    for (stdx.type_fields(ty)) |field| {
                         // In C, packed structs and enums are replaced with integers.
                         var field_type = field.type;
                         switch (@typeInfo(field_type)) {
                             .@"struct" => |info| {
                                 assert(info.layout == .@"packed");
                                 assert(@sizeOf(field_type) <= @sizeOf(u128));
-                                field_type = std.meta.Int(.unsigned, @bitSizeOf(field_type));
+                                field_type = @Int(.unsigned, @bitSizeOf(field_type));
                             },
                             .@"enum" => |info| field_type = info.tag_type,
                             .bool => field_type = u8,

@@ -32,7 +32,7 @@ const CLIArgs = struct {
     seed: ?u64 = null,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     comptime assert(builtin.target.cpu.arch.endian() == .little);
 
     if (builtin.os.tag == .windows) {
@@ -50,7 +50,7 @@ pub fn main() !void {
     }
     assert(builtin.os.tag == .linux);
 
-    var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_allocator = std.heap.DebugAllocator(.{}){};
     defer switch (gpa_allocator.deinit()) {
         .ok => {},
         .leak => @panic("memory leak"),
@@ -58,22 +58,24 @@ pub fn main() !void {
 
     const allocator = gpa_allocator.allocator();
 
-    var flags = stdx.Flags.init(allocator);
+    var flags = stdx.Flags.init(allocator, init.minimal.args);
     defer flags.deinit(allocator);
 
     const args = flags.parse(CLIArgs);
 
     if (args.log) |log_path| {
-        const log_file = try std.fs.cwd().createFile(log_path, .{});
-        defer log_file.close();
+        const log_file = try std.Io.Dir.cwd().createFile(init.io, log_path, .{});
+        defer log_file.close(init.io);
 
         // Redirect stderr to the file.
-        try std.posix.dup2(log_file.handle, std.posix.STDERR_FILENO);
+        try dup2_stderr(log_file.handle);
     }
 
     if (builtin.os.tag == .linux) {
         // Relaunch in fresh pid / network namespaces.
         try stdx.unshare.maybe_unshare_and_relaunch(allocator, .{
+            .io = init.io,
+            .args = init.minimal.args,
             .pid = true,
             .network = true,
         });
@@ -86,7 +88,7 @@ pub fn main() !void {
         log.warn("not testing upgrades", .{});
     }
 
-    const seed = args.seed orelse std.crypto.random.int(u64);
+    const seed = args.seed orelse @as(u64, @truncate(stdx.unique_u128()));
     var prng = stdx.PRNG.from_seed(seed);
 
     // Even if we have past versions available, only use them sometimes.
@@ -97,6 +99,8 @@ pub fn main() !void {
     );
 
     const supervisor = try Supervisor.create(allocator, .{
+        .io = init.io,
+        .environ = init.minimal.environ,
         .seed = prng.int(u64),
         .replica_count = args.replica_count,
         .faulty = !args.disable_faults,
@@ -122,8 +126,8 @@ pub fn main() !void {
         .{ .transfer_count = std.math.maxInt(u32) },
     );
 
-    var timer = try std.time.Timer.start();
-    while (timer.read() < args.test_duration.ns) {
+    const deadline = stdx.InstantUnix.now().add(args.test_duration);
+    while (stdx.InstantUnix.now().ns < deadline.ns) {
         try supervisor.tick();
     }
 
@@ -138,4 +142,14 @@ pub fn main() !void {
     }
     supervisor.workload_terminate();
     log.info("done", .{});
+}
+
+fn dup2_stderr(fd: std.os.linux.fd_t) !void {
+    switch (std.os.linux.errno(std.os.linux.dup2(fd, std.os.linux.STDERR_FILENO))) {
+        .SUCCESS => {},
+        .BADF => return error.FileNotFound,
+        .INTR => return error.Interrupted,
+        .MFILE => return error.SystemResources,
+        else => |err| return stdx.unexpected_errno("dup2", err),
+    }
 }

@@ -27,6 +27,14 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.faulty_network);
 const Ratio = stdx.PRNG.Ratio;
 
+fn shutdown_socket(fd: std.posix.socket_t) !void {
+    switch (std.os.linux.errno(std.os.linux.shutdown(fd, std.os.linux.SHUT.RDWR))) {
+        .SUCCESS => return,
+        .NOTCONN => return error.SocketNotConnected,
+        else => |errno| return stdx.unexpected_errno("shutdown", errno),
+    }
+}
+
 const Faults = struct {
     const Delay = struct {
         time_ms: u32,
@@ -168,7 +176,7 @@ const Pipe = struct {
             assert(timeout_duration_ns > 0);
 
             log.debug("delaying {} ({d},{d})", .{
-                std.fmt.fmtDuration(timeout_duration_ns),
+                stdx.fmt_duration(timeout_duration_ns),
                 pipe.connection.replica_index,
                 pipe.connection.connection_index,
             });
@@ -269,7 +277,7 @@ const Connection = struct {
     origin_to_remote_pipe: Pipe,
     remote_to_origin_pipe: Pipe,
 
-    remote_address: ?stdx.SocketAddress = null,
+    remote_address: ?std.Io.net.IpAddress = null,
 
     accept_completion: IO.Completion = undefined,
     connect_completion: IO.Completion = undefined,
@@ -296,7 +304,7 @@ const Connection = struct {
         connection.origin_fd = fd;
 
         const remote_fd = connection.io.open_socket_tcp(
-            connection.remote_address.?.ip.family(),
+            stdx.ip_address_family(connection.remote_address.?),
             tcp_options,
         ) catch |err| {
             log.warn("couldn't open socket for remote ({d},{d}): {}", .{
@@ -358,13 +366,13 @@ const Connection = struct {
                 connection.connection_index,
             });
             connection.state = .closing;
-            std.posix.shutdown(connection.origin_fd.?, .both) catch |err| switch (err) {
+            shutdown_socket(connection.origin_fd.?) catch |err| switch (err) {
                 error.SocketNotConnected => {},
                 else => log.warn("shutdown origin_fd ({d},{d}) failed: {}", .{
                     connection.replica_index, connection.connection_index, err,
                 }),
             };
-            std.posix.shutdown(connection.remote_fd.?, .both) catch |err| switch (err) {
+            shutdown_socket(connection.remote_fd.?) catch |err| switch (err) {
                 error.SocketNotConnected => {},
                 else => log.warn("shutdown remote_fd ({d},{d}) failed: {}", .{
                     connection.replica_index, connection.connection_index, err,
@@ -452,8 +460,8 @@ const Connection = struct {
 const Proxy = struct {
     io: *IO,
     accept_fd: std.posix.socket_t,
-    origin_address: stdx.SocketAddress, // The proxy's address.
-    remote_address: stdx.SocketAddress, // The replica's address.
+    origin_address: std.Io.net.IpAddress, // The proxy's address.
+    remote_address: std.Io.net.IpAddress, // The replica's address.
     connections: [constants.vortex.connections_count_max]Connection,
 
     fn deinit(proxy: *Proxy) void {
@@ -502,12 +510,10 @@ pub const Network = struct {
         // /proc/sys/net/ipv4/ip_local_port_range) by listening on port=0.
         // We assume that replicas' ports are from outside of that range and cannot conflict.
         for (proxies, replica_ports, 0..) |*proxy, replica_port, replica_index| {
-            const replica_address: stdx.SocketAddress = .{
-                .ip = .@"127.0.0.1",
-                .port = replica_port,
-            };
-            const listen_address: stdx.SocketAddress = .{ .ip = .@"127.0.0.1", .port = 0 };
-            const listen_fd = try io.open_socket_tcp(.IPv4, tcp_options);
+            const Address = std.Io.net.IpAddress;
+            const replica_address = Address.parse("127.0.0.1", replica_port) catch unreachable;
+            const listen_address = Address.parse("127.0.0.1", 0) catch unreachable;
+            const listen_fd = try io.open_socket_tcp(std.posix.AF.INET, tcp_options);
             errdefer io.close_socket(listen_fd);
 
             const origin_address = try io.listen(listen_fd, listen_address, .{ .backlog = 64 });

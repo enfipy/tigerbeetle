@@ -41,7 +41,7 @@ pub const AOFEntry = extern struct {
 
         // Ensure the message is the last field in the struct. When writing, the struct is truncated
         // based on the message length, so any fields after it would be truncated.
-        assert(std.meta.fieldIndex(AOFEntry, "message").? == std.meta.fields(AOFEntry).len - 1);
+        assert(std.meta.fieldIndex(AOFEntry, "message").? == stdx.type_fields(AOFEntry).len - 1);
     }
 
     /// Calculate the actual length of the AOFEntry that needs to be written to disk.
@@ -338,7 +338,7 @@ pub fn AOFType(comptime IO: type) type {
                 allocator: std.mem.Allocator,
                 time: vsr.time.Time,
                 cluster: u128,
-                addresses: []stdx.SocketAddress,
+                addresses: []std.Io.net.IpAddress,
             ) !ReplayClient {
                 assert(addresses.len > 0);
                 assert(addresses.len <= constants.replicas_max);
@@ -501,12 +501,12 @@ pub fn AOFType(comptime IO: type) type {
             last_checksum: ?u128 = null,
 
             pub fn init(io: *IO, path: []const u8) !Iterator {
-                const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
-                errdefer file.close();
+                const fd = try io.aof_blocking_open_read_only(path);
+                errdefer io.aof_blocking_close(fd);
 
-                const size = (try file.stat()).size;
+                const size = (try io.aof_blocking_fstat(fd)).size;
 
-                return Iterator{ .io = io, .file_descriptor = file.handle, .size = size };
+                return Iterator{ .io = io, .file_descriptor = fd, .size = size };
             }
 
             pub fn next(it: *Iterator, target: *AOFEntry) !?*AOFEntry {
@@ -624,7 +624,7 @@ pub fn AOFType(comptime IO: type) type {
             defer allocator.destroy(target);
 
             const dir_fd = try IO.open_dir(std.fs.path.dirname(output_path) orelse ".");
-            defer std.posix.close(dir_fd);
+            defer stdx.close_fd(dir_fd);
 
             for (input_paths) |input_path| {
                 aofs[aof_count] = try Iterator.init(io, input_path);
@@ -795,8 +795,8 @@ test "aof write / read" {
     const AOFIterator = AOF.Iterator;
 
     const aof_file = "test.aof";
-    std.fs.cwd().deleteFile(aof_file) catch {};
-    defer std.fs.cwd().deleteFile(aof_file) catch {};
+    std.Io.Dir.cwd().deleteFile(std.testing.io, aof_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, aof_file) catch {};
 
     const allocator = std.testing.allocator;
 
@@ -804,7 +804,7 @@ test "aof write / read" {
     defer io.deinit();
 
     const dir_fd = try IO.open_dir(".");
-    defer std.posix.close(dir_fd);
+    defer stdx.close_fd(dir_fd);
 
     var aof = try AOF.init(&io, aof_file);
 
@@ -930,7 +930,7 @@ const CLIArgs = union(enum) {
 };
 
 pub fn main() !void {
-    var gpa_instance: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var gpa_instance: std.heap.DebugAllocator(.{}) = .{};
     const gpa = gpa_instance.allocator();
 
     var time_os: vsr.time.TimeOS = .{};
@@ -957,7 +957,7 @@ pub fn main() !void {
             var it = try AOFIterator.init(&io, command.path);
             defer it.close();
 
-            var addresses_buffer: [constants.replicas_max]stdx.SocketAddress = undefined;
+            var addresses_buffer: [constants.replicas_max]std.Io.net.IpAddress = undefined;
             const addresses_parsed = try vsr.parse_addresses(command.addresses, &addresses_buffer);
             var replay =
                 try AOFReplayClient.init(&io, gpa, time, command.cluster, addresses_parsed);

@@ -148,7 +148,7 @@ const transfer_templates = table: {
     }.template;
 
     // [valid:bool][limit:bool][method]
-    var templates: [2][2][std.meta.fields(TransferPlan.Method).len]TransferTemplate = undefined;
+    var templates: [2][2][stdx.type_fields(TransferPlan.Method).len]TransferTemplate = undefined;
 
     // template(ledger, result)
     templates[0][0][SNGL] = template(0, result(.{ .ledger_must_not_be_zero = true }));
@@ -232,6 +232,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
 
         pub const Options = OptionsType(AccountingStateMachine, Action, Lookup);
 
+        allocator: std.mem.Allocator,
         prng: *stdx.PRNG,
         auditor: Auditor,
         options: Options,
@@ -278,9 +279,10 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             var auditor = try Auditor.init(allocator, prng, options.auditor_options);
             errdefer auditor.deinit(allocator);
 
-            var transfers_delivered_recently = TransferBatchQueue.init(allocator, {});
-            errdefer transfers_delivered_recently.deinit();
+            var transfers_delivered_recently = TransferBatchQueue.initContext({});
+            errdefer transfers_delivered_recently.deinit(allocator);
             try transfers_delivered_recently.ensureTotalCapacity(
+                allocator,
                 options.auditor_options.client_count * constants.client_request_queue_max,
             );
 
@@ -319,6 +321,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             errdefer transfers_retry_exists.deinit(allocator);
 
             return .{
+                .allocator = allocator,
                 .prng = prng,
                 .auditor = auditor,
                 .options = options,
@@ -331,7 +334,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
 
         pub fn deinit(self: *Workload, allocator: std.mem.Allocator) void {
             self.auditor.deinit(allocator);
-            self.transfers_delivered_recently.deinit();
+            self.transfers_delivered_recently.deinit(allocator);
             self.transfers_retry_failed.deinit(allocator);
             self.transfers_retry_exists.deinit(allocator);
         }
@@ -978,7 +981,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
 
             account_filter.flags.reversed = self.prng.boolean();
 
-            const operation = comptime std.enums.nameCast(Operation, action);
+            const operation = comptime stdx.name_cast(Operation, action);
             const batch_result_max = operation.result_max(self.options.batch_size_limit);
 
             // The timestamp range is restrictive to the number of transfers inserted at the
@@ -1041,7 +1044,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             assert(body.len == 1);
             const query_filter = &body[0];
 
-            const operation = comptime std.enums.nameCast(Operation, action);
+            const operation = comptime stdx.name_cast(Operation, action);
             const batch_result_max = operation.result_max(self.options.batch_size_limit);
             const limit: u32 = switch (self.prng.enum_uniform(enum {
                 zero,
@@ -1429,7 +1432,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             const transfer_index_max = self.transfer_id_to_index(transfers[transfers.len - 1].id);
             assert(transfer_index_min <= transfer_index_max);
 
-            self.transfers_delivered_recently.add(.{
+            self.transfers_delivered_recently.push(self.allocator, .{
                 .min = transfer_index_min,
                 .max = transfer_index_max,
             }) catch unreachable;
@@ -1437,7 +1440,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             while (self.transfers_delivered_recently.peek()) |delivered| {
                 if (self.transfers_delivered_past == delivered.min) {
                     self.transfers_delivered_past = delivered.max + 1;
-                    _ = self.transfers_delivered_recently.remove();
+                    _ = self.transfers_delivered_recently.pop();
                 } else {
                     assert(self.transfers_delivered_past < delivered.min);
                     break;
@@ -1499,7 +1502,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             const transfer_index_max = self.transfer_id_to_index(transfers[transfers.len - 1].id);
             assert(transfer_index_min <= transfer_index_max);
 
-            self.transfers_delivered_recently.add(.{
+            self.transfers_delivered_recently.push(self.allocator, .{
                 .min = transfer_index_min,
                 .max = transfer_index_max,
             }) catch unreachable;
@@ -1507,7 +1510,7 @@ pub fn WorkloadType(comptime AccountingStateMachine: type) type {
             while (self.transfers_delivered_recently.peek()) |delivered| {
                 if (self.transfers_delivered_past == delivered.min) {
                     self.transfers_delivered_past = delivered.max + 1;
-                    _ = self.transfers_delivered_recently.remove();
+                    _ = self.transfers_delivered_recently.pop();
                 } else {
                     assert(self.transfers_delivered_past < delivered.min);
                     break;

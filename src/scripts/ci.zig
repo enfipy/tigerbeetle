@@ -90,10 +90,10 @@ fn run_tests(shell: *Shell, gpa: std.mem.Allocator, language_requested: ?Languag
 }
 
 fn validate_release(shell: *Shell, gpa: std.mem.Allocator, language_requested: ?Language) !void {
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
+    const tmp_dir = try shell.create_tmp_dir();
+    defer std.Io.Dir.cwd().deleteTree(shell.io, tmp_dir) catch {};
 
-    try shell.pushd_dir(tmp_dir.dir);
+    try shell.pushd(tmp_dir);
     defer shell.popd();
 
     const release_info = try shell.exec_stdout(
@@ -144,7 +144,7 @@ fn validate_release(shell: *Shell, gpa: std.mem.Allocator, language_requested: ?
         .{ .tag_sha = tag_sha },
     );
     // Delete this as we will soon unzip a tigerbeetle binary to the same location.
-    try shell.cwd.deleteFile("tigerbeetle");
+    try shell.cwd.deleteFile(shell.io, "tigerbeetle");
 
     for (artifacts) |artifact| {
         // Zig only guarantees release builds to be deterministic.
@@ -188,7 +188,7 @@ fn validate_release(shell: *Shell, gpa: std.mem.Allocator, language_requested: ?
     assert(std.mem.indexOf(u8, version, tag) != null);
     assert(std.mem.indexOf(u8, version, "ReleaseSafe") != null);
 
-    const tigerbeetle_absolute_path = try shell.cwd.realpathAlloc(gpa, "tigerbeetle");
+    const tigerbeetle_absolute_path = try shell.cwd.realPathFileAlloc(shell.io, "tigerbeetle", gpa);
     defer gpa.free(tigerbeetle_absolute_path);
 
     inline for (comptime std.enums.values(Language)) |language| {

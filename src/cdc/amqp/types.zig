@@ -1,5 +1,4 @@
 const std = @import("std");
-const stdx = @import("stdx");
 const builtin = @import("builtin");
 const vsr = @import("../../vsr.zig");
 const protocol = @import("protocol.zig");
@@ -7,7 +6,7 @@ const Encoder = protocol.Encoder;
 const Decoder = protocol.Decoder;
 
 pub const ConnectOptions = struct {
-    host: stdx.SocketAddress,
+    host: std.Io.net.IpAddress,
     user_name: []const u8,
     password: []const u8,
     vhost: []const u8,
@@ -39,7 +38,7 @@ pub const ConnectionProperties = struct {
             .write = &struct {
                 fn write(context: *const anyopaque, encoder: *Encoder.TableEncoder) void {
                     const properties: *const ConnectionProperties = @ptrCast(@alignCast(context));
-                    inline for (std.meta.fields(ConnectionProperties)) |field| {
+                    inline for (vsr.stdx.type_fields(ConnectionProperties)) |field| {
                         const value = @field(properties, field.name);
                         encoder.put(field.name, switch (field.type) {
                             []const u8 => .{ .string = value },
@@ -129,12 +128,12 @@ pub const SASLPlainAuth = struct {
             .write = &struct {
                 fn write(context: *const anyopaque, buffer: []u8) usize {
                     const auth: *const SASLPlainAuth = @ptrCast(@alignCast(context));
-                    var fbs = std.io.fixedBufferStream(buffer);
-                    fbs.writer().print("\x00{s}\x00{s}", .{
+                    var writer = std.Io.Writer.fixed(buffer);
+                    writer.print("\x00{s}\x00{s}", .{
                         auth.user_name,
                         auth.password,
                     }) catch unreachable;
-                    return fbs.pos;
+                    return writer.end;
                 }
             }.write,
         };
@@ -186,7 +185,7 @@ pub const QueueDeclareArguments = struct {
             .write = &struct {
                 fn write(context: *const anyopaque, encoder: *Encoder.TableEncoder) void {
                     const arguments: *const QueueDeclareArguments = @ptrCast(@alignCast(context));
-                    inline for (std.meta.fields(QueueDeclareArguments)) |field| {
+                    inline for (vsr.stdx.type_fields(QueueDeclareArguments)) |field| {
                         if (@field(arguments, field.name)) |value| {
                             const FieldType = @TypeOf(value);
                             // Keys are follow the pattern "x-max-length":

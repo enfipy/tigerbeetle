@@ -111,24 +111,19 @@ pub fn parse_seed(bytes: []const u8) u64 {
 pub fn DeclEnumExcludingType(T: type, exclude: []const std.meta.DeclEnum(T)) type {
     const base = @typeInfo(std.meta.DeclEnum(T)).@"enum";
     assert(exclude.len > 0); // Use plain std.meta.DeclEnum.
-    assert(exclude.len < base.fields.len);
-    var fields_filtered: [base.fields.len - exclude.len]std.builtin.Type.EnumField = undefined;
+    assert(exclude.len < base.field_names.len);
+    var fields_filtered: [base.field_names.len - exclude.len]stdx.Type.EnumField = undefined;
     var i: usize = 0;
-    next_field: for (base.fields) |field| {
+    next_field: for (base.field_names, base.field_values) |field_name, field_value| {
         for (exclude) |excluded| {
-            if (std.mem.eql(u8, field.name, @tagName(excluded))) continue :next_field;
+            if (std.mem.eql(u8, field_name, @tagName(excluded))) continue :next_field;
         }
-        fields_filtered[i] = field;
+        fields_filtered[i] = .{ .name = field_name, .value = field_value };
         i += 1;
     }
     assert(i == fields_filtered.len);
 
-    return @Type(.{ .@"enum" = .{
-        .tag_type = base.tag_type,
-        .fields = &fields_filtered,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    return stdx.EnumFromFieldsType(base.tag_type, &fields_filtered, true);
 }
 
 pub fn limit_ram() void {

@@ -92,7 +92,7 @@ fn typescript_type(comptime Type: type) []const u8 {
         ),
         .@"struct" => |info| switch (info.layout) {
             .@"packed" => return comptime typescript_type(
-                std.meta.Int(.unsigned, @bitSizeOf(Type)),
+                @Int(.unsigned, @bitSizeOf(Type)),
             ),
             else => return comptime get_mapped_type_name(Type) orelse @compileError(
                 "Type " ++ @typeName(Type) ++ " not mapped.",
@@ -121,23 +121,23 @@ fn get_mapped_type_name(comptime Type: type) ?[]const u8 {
 }
 
 fn emit_enum(
-    buffer: *std.ArrayList(u8),
+    buffer: *std.array_list.Managed(u8),
     comptime Type: type,
     comptime mapping: TypeMapping,
 ) !void {
     try emit_docs(buffer, mapping, 0, null);
 
-    try buffer.writer().print("export enum {s} {{\n", .{mapping.name});
+    try buffer.print("export enum {s} {{\n", .{mapping.name});
 
-    inline for (@typeInfo(Type).@"enum".fields) |field| {
-        if (comptime std.mem.startsWith(u8, field.name, "deprecated_")) continue;
-        if (comptime mapping.hidden(field.name)) continue;
+    inline for (@typeInfo(Type).@"enum".field_names) |field_name| {
+        if (comptime std.mem.startsWith(u8, field_name, "deprecated_")) continue;
+        if (comptime mapping.hidden(field_name)) continue;
 
-        try emit_docs(buffer, mapping, 1, field.name);
+        try emit_docs(buffer, mapping, 1, field_name);
 
-        const int_value = @intFromEnum(@field(Type, field.name));
-        try buffer.writer().print("  {s} = {s},\n", .{
-            field.name,
+        const int_value = @intFromEnum(@field(Type, field_name));
+        try buffer.print("  {s} = {s},\n", .{
+            field_name,
             if (int_value == std.math.maxInt(@TypeOf(int_value)))
                 std.fmt.comptimePrint("0x{X}", .{int_value})
             else
@@ -145,68 +145,68 @@ fn emit_enum(
         });
     }
 
-    try buffer.writer().print("}}\n\n", .{});
+    try buffer.print("}}\n\n", .{});
 }
 
 fn emit_packed_struct(
-    buffer: *std.ArrayList(u8),
+    buffer: *std.array_list.Managed(u8),
     comptime type_info: anytype,
     comptime mapping: TypeMapping,
 ) !void {
     assert(type_info.layout == .@"packed");
     try emit_docs(buffer, mapping, 0, null);
 
-    try buffer.writer().print(
+    try buffer.print(
         \\export enum {s} {{
         \\  none = 0,
         \\
     , .{mapping.name});
 
-    inline for (type_info.fields, 0..) |field, i| {
-        if (comptime mapping.hidden(field.name)) continue;
+    inline for (type_info.field_names, 0..) |field_name, i| {
+        if (comptime mapping.hidden(field_name)) continue;
 
-        try emit_docs(buffer, mapping, 1, field.name);
+        try emit_docs(buffer, mapping, 1, field_name);
 
-        try buffer.writer().print("  {s} = (1 << {d}),\n", .{
-            field.name,
+        try buffer.print("  {s} = (1 << {d}),\n", .{
+            field_name,
             i,
         });
     }
 
-    try buffer.writer().print("}}\n\n", .{});
+    try buffer.print("}}\n\n", .{});
 }
 
 fn emit_struct(
-    buffer: *std.ArrayList(u8),
+    buffer: *std.array_list.Managed(u8),
     comptime type_info: anytype,
     comptime mapping: TypeMapping,
 ) !void {
     try emit_docs(buffer, mapping, 0, null);
 
-    try buffer.writer().print("export type {s} = {{\n", .{
+    try buffer.print("export type {s} = {{\n", .{
         mapping.name,
     });
 
-    inline for (type_info.fields) |field| {
-        if (comptime mapping.hidden(field.name)) continue;
+    inline for (type_info.field_names, type_info.field_types) |field_name, field_type| {
+        if (comptime mapping.hidden(field_name)) continue;
 
-        try emit_docs(buffer, mapping, 1, field.name);
+        try emit_docs(buffer, mapping, 1, field_name);
 
-        switch (@typeInfo(field.type)) {
-            .array => try buffer.writer().print("  {s}: Buffer\n", .{
-                field.name,
+        switch (@typeInfo(field_type)) {
+            .array => try buffer.print("  {s}: Buffer\n", .{
+                field_name,
             }),
-            else => try buffer.writer().print(
+            else => try buffer.print(
                 "  {s}: {s}\n",
                 .{
-                    field.name,
-                    typescript_type(field.type),
+                    field_name,
+                    typescript_type(field_type),
                 },
             ),
         }
     }
 
-    try buffer.writer().print("}}\n\n", .{});
+    try buffer.print("}}\n\n", .{});
 }
 
 fn emit_docs(
@@ -216,14 +216,14 @@ fn emit_docs(
     comptime field: ?[]const u8,
 ) !void {
     if (mapping.docs_link) |docs_link| {
-        try buffer.writer().print(
+        try buffer.print(
             \\
             \\{[indent]s}/**
             \\{[indent]s} * See [{[name]s}](https://docs.tigerbeetle.com/{[docs_link]s}{[field]s})
             \\{[indent]s} */
             \\
         , .{
-            .indent = "  " ** indent,
+            .indent = vsr.stdx.comptime_repeat("  ", indent),
             .name = field orelse mapping.name,
             .docs_link = docs_link,
             .field = field orelse "",
@@ -231,10 +231,10 @@ fn emit_docs(
     }
 }
 
-pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
+pub fn generate_bindings(buffer: *std.array_list.Managed(u8)) !void {
     @setEvalBranchQuota(100_000);
 
-    try buffer.writer().print(
+    try buffer.print(
         \\///////////////////////////////////////////////////////
         \\// This file was auto-generated by node_bindings.zig //
         \\//              Do not manually modify.              //
@@ -262,12 +262,15 @@ pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
     }
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var buffer = std.ArrayList(u8).init(allocator);
+    var buffer = std.array_list.Managed(u8).init(allocator);
     try generate_bindings(&buffer);
-    try std.io.getStdOut().writeAll(buffer.items);
+    var stdout_buffer: [std.heap.page_size_min]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    try stdout_writer.interface.writeAll(buffer.items);
+    try stdout_writer.interface.flush();
 }

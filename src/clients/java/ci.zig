@@ -61,7 +61,7 @@ pub fn validate_release_sample(shell: *Shell, gpa: std.mem.Allocator, options: s
 
     try shell.env.put("TB_ADDRESS", tmp_beetle.port_str);
 
-    try shell.cwd.writeFile(.{ .sub_path = "pom.xml", .data = try shell.fmt(
+    try shell.cwd.writeFile(shell.io, .{ .sub_path = "pom.xml", .data = try shell.fmt(
         \\<project>
         \\  <modelVersion>4.0.0</modelVersion>
         \\  <groupId>com.tigerbeetle</groupId>
@@ -131,7 +131,7 @@ pub fn validate_release_sample(shell: *Shell, gpa: std.mem.Allocator, options: s
             log.warn("waiting for 5 minutes for the {s} version to appear in maven cental", .{
                 options.release,
             });
-            std.time.sleep(5 * std.time.ns_per_min);
+            try std.Io.sleep(shell.io, .fromNanoseconds(5 * std.time.ns_per_min), .boot);
         }
     } else {
         shell.exec("mvn package --update-snapshots", .{}) catch |err| {

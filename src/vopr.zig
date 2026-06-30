@@ -91,13 +91,13 @@ const CLIArgs = struct {
     seed: ?[]const u8 = null,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     comptime assert(constants.verify);
     // This must be initialized at runtime as stderr is not comptime known on e.g. Windows.
-    log_buffer.unbuffered_writer = std.io.getStdErr().writer();
+    log_buffer = std.Io.File.stderr().writer(init.io, &log_buffer_storage);
     fuzz.limit_ram();
 
-    var gpa_instance: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var gpa_instance: std.heap.DebugAllocator(.{}) = .{};
     defer {
         _ = gpa_instance.detectLeaks();
         switch (gpa_instance.deinit()) {
@@ -108,7 +108,7 @@ pub fn main() !void {
 
     const gpa = gpa_instance.allocator();
 
-    var flags = stdx.Flags.init(gpa);
+    var flags = stdx.Flags.init(gpa, init.minimal.args);
     defer flags.deinit(gpa);
 
     const cli_args = flags.parse(CLIArgs);
@@ -124,7 +124,9 @@ pub fn main() !void {
 
     log_performance_mode = cli_args.performance;
 
-    const seed_random = std.crypto.random.int(u64);
+    var seed_random_bytes: [@sizeOf(u64)]u8 = undefined;
+    try init.io.randomSecure(&seed_random_bytes);
+    const seed_random = std.mem.readInt(u64, &seed_random_bytes, .little);
     const seed = seed_from_arg: {
         const seed_argument = cli_args.seed orelse break :seed_from_arg seed_random;
         break :seed_from_arg vsr.testing.parse_seed(seed_argument);
@@ -1176,11 +1178,11 @@ pub const Simulator = struct {
         assert(simulator.core.count() > 0);
 
         const FaultyReplicas = stdx.BitSetType(constants.members_max);
-        var blocks_missing = std.AutoArrayHashMap(
+        var blocks_missing = std.AutoArrayHashMapUnmanaged(
             struct { address: u64, checksum: u128 },
             FaultyReplicas,
-        ).init(gpa);
-        defer blocks_missing.deinit();
+        ).empty;
+        defer blocks_missing.deinit(gpa);
 
         // Find all blocks that any replica in the core is missing.
         for (simulator.cluster.replicas) |replica| {
@@ -1191,7 +1193,7 @@ pub const Simulator = struct {
 
             var fault_iterator = replica.grid.read_global_queue.iterate();
             while (fault_iterator.next()) |faulty_read| {
-                const v = try blocks_missing.getOrPut(.{
+                const v = try blocks_missing.getOrPut(gpa, .{
                     .address = faulty_read.address,
                     .checksum = faulty_read.checksum,
                 });
@@ -1210,7 +1212,7 @@ pub const Simulator = struct {
 
             var repair_iterator = replica.grid.blocks_missing.faulty_blocks.iterator();
             while (repair_iterator.next()) |fault| {
-                const v = try blocks_missing.getOrPut(.{
+                const v = try blocks_missing.getOrPut(gpa, .{
                     .address = fault.key_ptr.*,
                     .checksum = fault.value_ptr.checksum,
                 });
@@ -1767,10 +1769,8 @@ fn full_core(replica_count: u8, standby_count: u8) Core {
     return core;
 }
 
-var log_buffer: std.io.BufferedWriter(4096, std.fs.File.Writer) = .{
-    // This is initialized in main(), as std.io.getStdErr() is not comptime known on e.g. Windows.
-    .unbuffered_writer = undefined,
-};
+var log_buffer_storage: [4096]u8 = undefined;
+var log_buffer: std.Io.File.Writer = undefined;
 
 var log_performance_mode: bool = false;
 
@@ -1797,9 +1797,9 @@ fn log_override(
 
     // Print the message to stderr using a buffer to avoid many small write() syscalls when
     // providing many format arguments. Silently ignore failure.
-    log_buffer.writer().print(prefix ++ format ++ "\n", args) catch {};
+    log_buffer.interface.print(prefix ++ format ++ "\n", args) catch {};
 
     // Flush the buffer before returning to ensure, for example, that a log message
     // immediately before a failing assertion is fully printed.
-    log_buffer.flush() catch {};
+    log_buffer.interface.flush() catch {};
 }

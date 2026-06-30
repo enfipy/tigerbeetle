@@ -220,20 +220,33 @@ pub const Logging = struct {
     ) callconv(.c) void;
 
     const log_line_max = 8192;
+    const Mutex = struct {
+        state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+        fn lock(mutex: *Mutex) void {
+            while (mutex.state.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) {
+                std.atomic.spinLoopHint();
+            }
+        }
+
+        fn unlock(mutex: *Mutex) void {
+            mutex.state.store(0, .release);
+        }
+    };
 
     /// Logging is global per process; it would be nice to be able to define a different logger
     /// for each client instance, though.
     var global: Logging = .{};
 
     callback: ?Callback = null,
-    mutex: std.Thread.Mutex = .{},
+    mutex: Mutex = .{},
     buffer: [log_line_max]u8 = undefined,
     debug: bool = false,
 
     /// A logger which defers to an application provided handler.
     pub fn application_logger(
         comptime message_level: std.log.Level,
-        comptime scope: @Type(.enum_literal),
+        comptime scope: @TypeOf(.default),
         comptime format: []const u8,
         args: anytype,
     ) void {
