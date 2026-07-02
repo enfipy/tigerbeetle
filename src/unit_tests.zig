@@ -84,32 +84,39 @@ const quine =
     \\    const arena = arena_instance.allocator();
     \\
     \\    // build.zig runs this in the root dir.
-    \\    var src_dir = try std.fs.cwd().openDir("src", .{
+    \\    var src_dir = try std.Io.Dir.cwd().openDir(std.testing.io, "src", .{
     \\        .access_sub_paths = true,
     \\        .iterate = true,
     \\    });
+    \\    defer src_dir.close(std.testing.io);
     \\
-    \\    var unit_tests_contents = std.ArrayList(u8).init(arena);
-    \\    const writer = unit_tests_contents.writer();
-    \\    try writer.writeAll("comptime {\n");
+    \\    var unit_tests_contents: std.ArrayList(u8) = .empty;
+    \\    defer unit_tests_contents.deinit(arena);
+    \\
+    \\    try unit_tests_contents.appendSlice(arena, "comptime {\n");
     \\
     \\    for (try unit_test_files(arena, src_dir)) |unit_test_file| {
-    \\        try writer.print("    _ = @import(\"{s}\");\n", .{unit_test_file});
+    \\        try unit_tests_contents.print(arena, "    _ = @import(\"{s}\");\n", .{unit_test_file});
     \\    }
     \\
-    \\    try writer.writeAll("}\n\n");
+    \\    try unit_tests_contents.appendSlice(arena, "}\n\n");
     \\
     \\    var quine_lines = std.mem.splitScalar(u8, quine, '\n');
-    \\    try writer.writeAll("const quine =\n");
+    \\    try unit_tests_contents.appendSlice(arena, "const quine =\n");
     \\    while (quine_lines.next()) |line| {
-    \\        try writer.print("    \\\\{s}\n", .{line});
+    \\        try unit_tests_contents.print(arena, "    \\\\{s}\n", .{line});
     \\    }
-    \\    try writer.writeAll(";\n\n");
+    \\    try unit_tests_contents.appendSlice(arena, ";\n\n");
     \\
-    \\    try writer.writeAll(quine);
+    \\    try unit_tests_contents.appendSlice(arena, quine);
     \\
     \\    assert(std.mem.eql(u8, @src().file, "unit_tests.zig"));
-    \\    const unit_tests_contents_disk = try src_dir.readFileAlloc(arena, @src().file, 1 * MiB);
+    \\    const unit_tests_contents_disk = try src_dir.readFileAlloc(
+    \\        std.testing.io,
+    \\        @src().file,
+    \\        arena,
+    \\        .limited(1 * MiB),
+    \\    );
     \\    assert(std.mem.startsWith(u8, unit_tests_contents_disk, "comptime {"));
     \\    assert(std.mem.endsWith(u8, unit_tests_contents.items, "}\n"));
     \\
@@ -120,9 +127,9 @@ const quine =
     \\    );
     \\
     \\    if (unit_tests_needs_update) {
-    \\        if (std.process.hasEnvVarConstant("SNAP_UPDATE")) {
+    \\        if (std.testing.environ.getPosix("SNAP_UPDATE") != null) {
     \\            // Add the rest of the real file on disk to the generated in-memory file.
-    \\            try src_dir.writeFile(.{
+    \\            try src_dir.writeFile(std.testing.io, .{
     \\                .sub_path = "unit_tests.zig",
     \\                .data = unit_tests_contents.items,
     \\                .flags = .{ .exclusive = false, .truncate = true },
@@ -138,15 +145,15 @@ const quine =
     \\    }
     \\}
     \\
-    \\fn unit_test_files(arena: std.mem.Allocator, src_dir: std.fs.Dir) ![]const []const u8 {
+    \\fn unit_test_files(arena: std.mem.Allocator, src_dir: std.Io.Dir) ![]const []const u8 {
     \\    // Different platforms can walk the directory in different orders.
     \\    // Store the paths and sort them to ensure consistency.
-    \\    var result = std.ArrayList([]const u8).init(arena);
+    \\    var result: std.ArrayList([]const u8) = .empty;
     \\
     \\    var src_walker = try src_dir.walk(arena);
     \\    defer src_walker.deinit();
     \\
-    \\    while (try src_walker.next()) |entry| {
+    \\    while (try src_walker.next(std.testing.io)) |entry| {
     \\        if (entry.kind != .file) continue;
     \\
     \\        const entry_path = try arena.dupe(u8, entry.path);
@@ -168,12 +175,17 @@ const quine =
     \\        if (std.mem.eql(u8, entry_path, "clients/c/tb_client_header_test.zig")) continue;
     \\        if (std.mem.eql(u8, entry_path, "tigerbeetle/libtb_client.zig")) continue;
     \\
-    \\        const contents = try src_dir.readFileAlloc(arena, entry_path, 1 * MiB);
+    \\        const contents = try src_dir.readFileAlloc(
+    \\            std.testing.io,
+    \\            entry_path,
+    \\            arena,
+    \\            .limited(1 * MiB),
+    \\        );
     \\        var line_iterator = std.mem.splitScalar(u8, contents, '\n');
     \\        while (line_iterator.next()) |line| {
-    \\            const line_trimmed = std.mem.trimLeft(u8, line, " ");
+    \\            const line_trimmed = std.mem.trimStart(u8, line, " ");
     \\            if (std.mem.startsWith(u8, line_trimmed, "test ")) {
-    \\                try result.append(entry_path);
+    \\                try result.append(arena, entry_path);
     \\                break;
     \\            }
     \\        }
@@ -209,32 +221,39 @@ test quine {
     const arena = arena_instance.allocator();
 
     // build.zig runs this in the root dir.
-    var src_dir = try std.fs.cwd().openDir("src", .{
+    var src_dir = try std.Io.Dir.cwd().openDir(std.testing.io, "src", .{
         .access_sub_paths = true,
         .iterate = true,
     });
+    defer src_dir.close(std.testing.io);
 
-    var unit_tests_contents = std.ArrayList(u8).init(arena);
-    const writer = unit_tests_contents.writer();
-    try writer.writeAll("comptime {\n");
+    var unit_tests_contents: std.ArrayList(u8) = .empty;
+    defer unit_tests_contents.deinit(arena);
+
+    try unit_tests_contents.appendSlice(arena, "comptime {\n");
 
     for (try unit_test_files(arena, src_dir)) |unit_test_file| {
-        try writer.print("    _ = @import(\"{s}\");\n", .{unit_test_file});
+        try unit_tests_contents.print(arena, "    _ = @import(\"{s}\");\n", .{unit_test_file});
     }
 
-    try writer.writeAll("}\n\n");
+    try unit_tests_contents.appendSlice(arena, "}\n\n");
 
     var quine_lines = std.mem.splitScalar(u8, quine, '\n');
-    try writer.writeAll("const quine =\n");
+    try unit_tests_contents.appendSlice(arena, "const quine =\n");
     while (quine_lines.next()) |line| {
-        try writer.print("    \\\\{s}\n", .{line});
+        try unit_tests_contents.print(arena, "    \\\\{s}\n", .{line});
     }
-    try writer.writeAll(";\n\n");
+    try unit_tests_contents.appendSlice(arena, ";\n\n");
 
-    try writer.writeAll(quine);
+    try unit_tests_contents.appendSlice(arena, quine);
 
     assert(std.mem.eql(u8, @src().file, "unit_tests.zig"));
-    const unit_tests_contents_disk = try src_dir.readFileAlloc(arena, @src().file, 1 * MiB);
+    const unit_tests_contents_disk = try src_dir.readFileAlloc(
+        std.testing.io,
+        @src().file,
+        arena,
+        .limited(1 * MiB),
+    );
     assert(std.mem.startsWith(u8, unit_tests_contents_disk, "comptime {"));
     assert(std.mem.endsWith(u8, unit_tests_contents.items, "}\n"));
 
@@ -245,9 +264,9 @@ test quine {
     );
 
     if (unit_tests_needs_update) {
-        if (std.process.hasEnvVarConstant("SNAP_UPDATE")) {
+        if (std.testing.environ.getPosix("SNAP_UPDATE") != null) {
             // Add the rest of the real file on disk to the generated in-memory file.
-            try src_dir.writeFile(.{
+            try src_dir.writeFile(std.testing.io, .{
                 .sub_path = "unit_tests.zig",
                 .data = unit_tests_contents.items,
                 .flags = .{ .exclusive = false, .truncate = true },
@@ -263,15 +282,15 @@ test quine {
     }
 }
 
-fn unit_test_files(arena: std.mem.Allocator, src_dir: std.fs.Dir) ![]const []const u8 {
+fn unit_test_files(arena: std.mem.Allocator, src_dir: std.Io.Dir) ![]const []const u8 {
     // Different platforms can walk the directory in different orders.
     // Store the paths and sort them to ensure consistency.
-    var result = std.ArrayList([]const u8).init(arena);
+    var result: std.ArrayList([]const u8) = .empty;
 
     var src_walker = try src_dir.walk(arena);
     defer src_walker.deinit();
 
-    while (try src_walker.next()) |entry| {
+    while (try src_walker.next(std.testing.io)) |entry| {
         if (entry.kind != .file) continue;
 
         const entry_path = try arena.dupe(u8, entry.path);
@@ -293,12 +312,17 @@ fn unit_test_files(arena: std.mem.Allocator, src_dir: std.fs.Dir) ![]const []con
         if (std.mem.eql(u8, entry_path, "clients/c/tb_client_header_test.zig")) continue;
         if (std.mem.eql(u8, entry_path, "tigerbeetle/libtb_client.zig")) continue;
 
-        const contents = try src_dir.readFileAlloc(arena, entry_path, 1 * MiB);
+        const contents = try src_dir.readFileAlloc(
+            std.testing.io,
+            entry_path,
+            arena,
+            .limited(1 * MiB),
+        );
         var line_iterator = std.mem.splitScalar(u8, contents, '\n');
         while (line_iterator.next()) |line| {
-            const line_trimmed = std.mem.trimLeft(u8, line, " ");
+            const line_trimmed = std.mem.trimStart(u8, line, " ");
             if (std.mem.startsWith(u8, line_trimmed, "test ")) {
-                try result.append(entry_path);
+                try result.append(arena, entry_path);
                 break;
             }
         }

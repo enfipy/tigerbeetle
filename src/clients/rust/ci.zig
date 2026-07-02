@@ -2,7 +2,8 @@ const std = @import("std");
 const log = std.log;
 const assert = std.debug.assert;
 
-const Shell = @import("stdx").Shell;
+const stdx = @import("stdx");
+const Shell = stdx.Shell;
 const TmpTigerBeetle = @import("../../testing/tmp_tigerbeetle.zig");
 
 pub fn tests(shell: *Shell, gpa: std.mem.Allocator) !void {
@@ -42,14 +43,17 @@ fn file_contains(
         line_length_max: u32 = 100,
     },
 ) !bool {
-    const file = try shell.cwd.openFile(path, .{});
-    defer file.close();
+    const contents = try shell.cwd.readFileAlloc(
+        shell.io,
+        path,
+        gpa,
+        .limited(1 * stdx.MiB),
+    );
+    defer gpa.free(contents);
 
-    const line_buffer = try gpa.alloc(u8, options.line_length_max + 1);
-    defer gpa.free(line_buffer);
-
-    const reader = file.reader();
-    while (try reader.readUntilDelimiterOrEof(line_buffer, '\n')) |line| {
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |line| {
+        assert(line.len <= options.line_length_max);
         if (std.mem.indexOf(u8, line, options.needle) != null) return true;
     }
 
@@ -69,7 +73,7 @@ pub fn validate_release_sample(shell: *Shell, gpa: std.mem.Allocator, options: s
     tigerbeetle: []const u8,
 }) !void {
     const tmp_dir = try shell.create_tmp_dir();
-    defer shell.cwd.deleteTree(tmp_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(shell.io, tmp_dir) catch {};
 
     const base_dir = shell.cwd;
     try shell.pushd(tmp_dir);
@@ -86,7 +90,7 @@ pub fn validate_release_sample(shell: *Shell, gpa: std.mem.Allocator, options: s
             log.warn("waiting for 5 minutes for the {s} version to appear on crates.io", .{
                 options.release,
             });
-            std.time.sleep(5 * std.time.ns_per_min);
+            try std.Io.sleep(shell.io, .fromNanoseconds(5 * std.time.ns_per_min), .boot);
         }
     } else {
         shell.exec("cargo add tigerbeetle@{release}", .{

@@ -14,34 +14,26 @@ pub const Terminal = struct {
     };
 
     mode_start: ?ModeStart,
-    stdin: std.io.BufferedReader(4096, std.fs.File.Reader),
+    stdin: std.Io.File.Reader,
+    stdin_buffer: [4096]u8,
     // These are made optional so that printing on failure can be disabled in tests expecting them.
-    stdout: std.fs.File.Writer,
-    stderr: std.fs.File.Writer,
+    stdout: std.Io.File.Writer,
+    stdout_buffer: [4096]u8,
+    stderr: std.Io.File.Writer,
+    stderr_buffer: [4096]u8,
 
     pub fn init(
         terminal: *Terminal,
+        process_io: std.Io,
         interactive: bool,
     ) !void {
-        const stdout = std.io.getStdOut();
-        if (interactive and !stdout.getOrEnableAnsiEscapeSupport()) {
-            std.debug.print("ANSI escape sequences not supported.\n", .{});
-            std.process.exit(1);
-        }
-
-        const stdin = std.io.getStdIn();
+        const stdout = std.Io.File.stdout();
+        const stdin = std.Io.File.stdin();
         var mode_start: ?ModeStart = null;
         if (interactive) {
             if (builtin.os.tag == .windows) {
-                var mode_stdin: u32 = 0;
-                if (windows.kernel32.GetConsoleMode(stdin.handle, &mode_stdin) == 0) {
-                    return windows.unexpectedError(windows.kernel32.GetLastError());
-                }
-
-                var mode_stdout: u32 = 0;
-                if (windows.kernel32.GetConsoleMode(stdout.handle, &mode_stdout) == 0) {
-                    return windows.unexpectedError(windows.kernel32.GetLastError());
-                }
+                const mode_stdin = try stdx.windows.get_console_mode(stdin.handle);
+                const mode_stdout = try stdx.windows.get_console_mode(stdout.handle);
 
                 mode_start = WindowsConsoleMode{
                     .stdin = mode_stdin,
@@ -52,40 +44,43 @@ pub const Terminal = struct {
             }
         }
 
-        terminal.* = Terminal{
-            .mode_start = mode_start,
-            .stdin = std.io.bufferedReader(stdin.reader()),
-            .stdout = stdout.writer(),
-            .stderr = std.io.getStdErr().writer(),
-        };
+        terminal.mode_start = mode_start;
+        terminal.stdin_buffer = undefined;
+        terminal.stdout_buffer = undefined;
+        terminal.stderr_buffer = undefined;
+        terminal.stdin = stdin.reader(process_io, &terminal.stdin_buffer);
+        terminal.stdout = stdout.writer(process_io, &terminal.stdout_buffer);
+        terminal.stderr = std.Io.File.stderr().writer(process_io, &terminal.stderr_buffer);
     }
 
     pub fn print(
-        terminal: *const Terminal,
+        terminal: *Terminal,
         comptime format: []const u8,
         arguments: anytype,
     ) !void {
-        try terminal.stdout.print(format, arguments);
+        try terminal.stdout.interface.print(format, arguments);
+        try terminal.stdout.interface.flush();
     }
 
     pub fn print_error(
-        terminal: *const Terminal,
+        terminal: *Terminal,
         comptime format: []const u8,
         arguments: anytype,
     ) !void {
         comptime assert(format.len > 0);
         comptime assert(format[format.len - 1] == '\n' or std.mem.eql(u8, format, " "));
 
-        try terminal.stderr.print(format, arguments);
+        try terminal.stderr.interface.print(format, arguments);
+        try terminal.stderr.interface.flush();
     }
 
     pub fn read_user_input(terminal: *Terminal) !?UserInput {
         assert(terminal.mode_start != null);
-        const stdin = terminal.stdin.reader();
+        const stdin = &terminal.stdin.interface;
 
         // NB: Many control codes have names unrelated to their modern function.
         // https://en.wikipedia.org/wiki/C0_and_C1_control_codes
-        switch (try stdin.readByte()) {
+        switch (try stdin.takeByte()) {
             std.ascii.control_code.eot => return .ctrld,
             std.ascii.control_code.etx => return .ctrlc,
             std.ascii.control_code.ff => return .ctrll,
@@ -103,10 +98,10 @@ pub const Terminal = struct {
                 // TODO: It would be nice to fully parse unhandled escape codes, and not just give
                 // up partway through and return `.unhandled` - but ansi escape codes are extremely
                 // complicated, so that may not be completely possible.
-                const second_byte = try stdin.readByte();
+                const second_byte = try stdin.takeByte();
                 switch (second_byte) {
                     '[' => {
-                        const third_byte = try stdin.readByte();
+                        const third_byte = try stdin.takeByte();
                         switch (third_byte) {
                             'A' => return .up,
                             'B' => return .down,
@@ -115,13 +110,13 @@ pub const Terminal = struct {
                             'H' => return .home,
                             'F' => return .end,
                             '1' => {
-                                const fourth_byte = try stdin.readByte();
+                                const fourth_byte = try stdin.takeByte();
                                 switch (fourth_byte) {
                                     ';' => {
-                                        const fifth_byte = try stdin.readByte();
+                                        const fifth_byte = try stdin.takeByte();
                                         switch (fifth_byte) {
                                             '5' => {
-                                                const sixth_byte = try stdin.readByte();
+                                                const sixth_byte = try stdin.takeByte();
                                                 switch (sixth_byte) {
                                                     'C' => return .ctrlright,
                                                     'D' => return .ctrlleft,
@@ -136,7 +131,7 @@ pub const Terminal = struct {
                                 }
                             },
                             '3' => {
-                                const fourth_byte = try stdin.readByte();
+                                const fourth_byte = try stdin.takeByte();
                                 switch (fourth_byte) {
                                     '~' => {
                                         // This is just one of multiple non-standard escape codes
@@ -165,7 +160,7 @@ pub const Terminal = struct {
 
     pub fn prompt_mode_set(terminal: *const Terminal) anyerror!void {
         assert(terminal.mode_start != null);
-        const stdin = std.io.getStdIn();
+        const stdin = std.Io.File.stdin();
         if (builtin.os.tag == .windows) {
             const console_mode = terminal.mode_start.?;
 
@@ -174,9 +169,7 @@ pub const Terminal = struct {
             mode_stdin &= ~@intFromEnum(WindowsConsoleMode.Input.enable_line_input);
             mode_stdin &= ~@intFromEnum(WindowsConsoleMode.Input.enable_echo_input);
             mode_stdin |= @intFromEnum(WindowsConsoleMode.Input.enable_virtual_terminal_input);
-            if (windows.kernel32.SetConsoleMode(stdin.handle, mode_stdin) == 0) {
-                return windows.unexpectedError(windows.kernel32.GetLastError());
-            }
+            try stdx.windows.set_console_mode(stdin.handle, mode_stdin);
 
             var mode_stdout: u32 = console_mode.stdout;
             mode_stdout |= @intFromEnum(WindowsConsoleMode.Output.enable_processed_output);
@@ -185,9 +178,7 @@ pub const Terminal = struct {
                 WindowsConsoleMode.Output.enable_virtual_terminal_processing,
             );
             mode_stdout &= ~@intFromEnum(WindowsConsoleMode.Output.disable_newline_auto_return);
-            if (windows.kernel32.SetConsoleMode(std.io.getStdOut().handle, mode_stdout) == 0) {
-                return windows.unexpectedError(windows.kernel32.GetLastError());
-            }
+            try stdx.windows.set_console_mode(std.Io.File.stdout().handle, mode_stdout);
         } else {
             var termios_new = terminal.mode_start.?;
             termios_new.lflag.ECHO = false;
@@ -201,19 +192,15 @@ pub const Terminal = struct {
 
     pub fn prompt_mode_unset(terminal: *const Terminal) !void {
         assert(terminal.mode_start != null);
-        const stdin = std.io.getStdIn();
+        const stdin = std.Io.File.stdin();
         if (builtin.os.tag == .windows) {
             const console_mode = terminal.mode_start.?;
-            if (windows.kernel32.SetConsoleMode(stdin.handle, console_mode.stdin) == 0) {
-                return windows.unexpectedError(windows.kernel32.GetLastError());
-            }
-            const stdout = std.io.getStdOut();
-            if (windows.kernel32.SetConsoleMode(stdout.handle, console_mode.stdout) == 0) {
-                return windows.unexpectedError(windows.kernel32.GetLastError());
-            }
+            try stdx.windows.set_console_mode(stdin.handle, console_mode.stdin);
+            const stdout = std.Io.File.stdout();
+            try stdx.windows.set_console_mode(stdout.handle, console_mode.stdout);
         } else {
             const termios = terminal.mode_start.?;
-            try posix.tcsetattr(std.io.getStdIn().handle, .NOW, termios);
+            try posix.tcsetattr(std.Io.File.stdin().handle, .NOW, termios);
         }
     }
 
@@ -223,52 +210,36 @@ pub const Terminal = struct {
         // Obtaining the cursor's position relies on sending a request payload to stdout. The
         // response is read from stdin, but it may have been altered by user input, so we keep
         // retrying until successful.
-        const stdin = terminal.stdin.reader();
+        const stdin = &terminal.stdin.interface;
         while (true) {
             // The terminal needs to read control codes, but the exact input capacity
             // is unknown; this should be more than enough.
             var buffer: [256]u8 = undefined;
-            var buffer_in = std.io.fixedBufferStream(&buffer);
             // The response is of the form `<ESC>[{row};{col}R`.
             try terminal.print("\x1b[6n", .{});
-            buffer_in.reset();
-            stdin.streamUntilDelimiter(
-                buffer_in.writer(),
-                '[',
-                buffer.len,
-            ) catch |err| {
+            _ = read_until_delimiter(stdin, &buffer, '[') catch |err| {
                 switch (err) {
-                    anyerror.StreamTooLong => continue,
+                    error.StreamTooLong => continue,
                     else => return err,
                 }
             };
 
-            buffer_in.reset();
-            stdin.streamUntilDelimiter(
-                buffer_in.writer(),
-                ';',
-                buffer.len,
-            ) catch |err| {
+            const row_text = read_until_delimiter(stdin, &buffer, ';') catch |err| {
                 switch (err) {
-                    anyerror.StreamTooLong => continue,
+                    error.StreamTooLong => continue,
                     else => return err,
                 }
             };
-            const row = stdx.parse_int(usize, buffer_in.getWritten(), .{}) catch
+            const row = stdx.parse_int(usize, row_text, .{}) catch
                 continue;
 
-            buffer_in.reset();
-            stdin.streamUntilDelimiter(
-                buffer_in.writer(),
-                'R',
-                buffer.len,
-            ) catch |err| {
+            const column_text = read_until_delimiter(stdin, &buffer, 'R') catch |err| {
                 switch (err) {
-                    anyerror.StreamTooLong => continue,
+                    error.StreamTooLong => continue,
                     else => return err,
                 }
             };
-            const column = stdx.parse_int(usize, buffer_in.getWritten(), .{}) catch
+            const column = stdx.parse_int(usize, column_text, .{}) catch
                 continue;
 
             return .{
@@ -298,6 +269,21 @@ pub const Terminal = struct {
         };
     }
 };
+
+fn read_until_delimiter(
+    reader: *std.Io.Reader,
+    buffer: []u8,
+    delimiter: u8,
+) ![]const u8 {
+    var index: usize = 0;
+    while (true) {
+        const byte = try reader.takeByte();
+        if (byte == delimiter) return buffer[0..index];
+        if (index == buffer.len) return error.StreamTooLong;
+        buffer[index] = byte;
+        index += 1;
+    }
+}
 
 const Screen = struct {
     rows: usize,

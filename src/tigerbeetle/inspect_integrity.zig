@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const stdx = vsr.stdx;
 const assert = std.debug.assert;
 const log = std.log.scoped(.integrity);
@@ -23,6 +24,7 @@ const GridScrubber = vsr.GridScrubberType(Forest, constants.grid_iops_read_max);
 
 pub fn command_inspect_integrity(
     gpa: std.mem.Allocator,
+    process_io: std.Io,
     io: *IO,
     tracer: *Tracer,
     args: *const cli.Command.Inspect.Integrity,
@@ -74,7 +76,7 @@ pub fn command_inspect_integrity(
             break :seed_from_arg vsr.testing.parse_seed(seed_argument);
         };
 
-        const checked_bytes_grid = try integrity.check_grid(seed);
+        const checked_bytes_grid = try integrity.check_grid(process_io, seed);
         assert(checked_bytes_grid == grid_blocks_expected_count * constants.block_size);
 
         checked_bytes += checked_bytes_grid;
@@ -127,6 +129,30 @@ grid_blocks_scrubbed: std.bit_set.DynamicBitSetUnmanaged,
 buffer_headers: []align(constants.sector_size) u8,
 buffer_prepare: []align(constants.sector_size) u8,
 
+fn file_size(fd: IO.fd_t) !u64 {
+    if (comptime builtin.target.os.tag == .windows) {
+        return stdx.windows.get_file_size_ex(fd);
+    } else if (comptime builtin.target.os.tag == .macos) {
+        var stat: std.posix.system.Stat = undefined;
+        switch (std.posix.errno(std.posix.system.fstat(fd, &stat))) {
+            .SUCCESS => return @intCast(stat.size),
+            else => |err| return stdx.unexpected_errno("fstat", err),
+        }
+    }
+
+    var stat: std.os.linux.Statx = undefined;
+    switch (std.os.linux.errno(std.os.linux.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX{ .SIZE = true },
+        &stat,
+    ))) {
+        .SUCCESS => return stat.size,
+        else => |err| return stdx.unexpected_errno("statx", err),
+    }
+}
+
 fn init(
     integrity: *Integrity,
     gpa: std.mem.Allocator,
@@ -145,7 +171,7 @@ fn init(
     });
     errdefer integrity.storage.deinit();
 
-    const data_file_stat = try (std.fs.File{ .handle = integrity.storage.fd }).stat();
+    const data_file_size = try file_size(integrity.storage.fd);
 
     integrity.superblock = try SuperBlock.init(
         gpa,
@@ -153,7 +179,7 @@ fn init(
         .{
             .storage_size_limit = std.mem.alignForward(
                 u64,
-                data_file_stat.size,
+                data_file_size,
                 constants.block_size,
             ),
         },
@@ -235,20 +261,20 @@ fn init(
         gpa,
         // Safe estimation for the maximum number of grid blocks based on file size. Using
         // storage_size_limit_max would increase the memory usage dramatically for small data files.
-        @divFloor(data_file_stat.size, constants.block_size),
+        @divFloor(data_file_size, constants.block_size),
     );
     errdefer integrity.grid_blocks_scrubbed.deinit(gpa);
 
     integrity.buffer_headers = try gpa.alignedAlloc(
         u8,
-        constants.sector_size,
+        .fromByteUnits(constants.sector_size),
         constants.journal_size_headers,
     );
     errdefer gpa.free(integrity.buffer_headers);
 
     integrity.buffer_prepare = try gpa.alignedAlloc(
         u8,
-        constants.sector_size,
+        .fromByteUnits(constants.sector_size),
         constants.message_size_max,
     );
     errdefer gpa.free(integrity.buffer_prepare);
@@ -385,7 +411,7 @@ fn check_client_replies(integrity: *Integrity) !u64 {
 }
 
 /// Checks the grid, using the grid scrubber.
-fn check_grid(integrity: *Integrity, seed: u64) !u64 {
+fn check_grid(integrity: *Integrity, process_io: std.Io, seed: u64) !u64 {
     var checked_bytes: u64 = 0;
     const grid = &integrity.grid;
 
@@ -404,7 +430,7 @@ fn check_grid(integrity: *Integrity, seed: u64) !u64 {
     var prng = stdx.PRNG.from_seed(seed);
     integrity.grid_scrubber.open(&prng);
 
-    const parent_progress_node = std.Progress.start(.{
+    const parent_progress_node = std.Progress.start(process_io, .{
         .root_name = "checking grid blocks",
         .estimated_total_items = blocks_expected_count,
     });

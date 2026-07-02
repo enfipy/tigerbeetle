@@ -1,4 +1,5 @@
 const std = @import("std");
+const posix = std.posix;
 const assert = std.debug.assert;
 
 const vsr = @import("../tb_client.zig").vsr;
@@ -6,6 +7,18 @@ const TimeOS = vsr.time.TimeOS;
 const IO = vsr.io.IO;
 
 const Atomic = std.atomic.Value;
+
+fn sleep_ns(nanoseconds: u64) void {
+    var request: posix.timespec = .{
+        .sec = @intCast(@divFloor(nanoseconds, std.time.ns_per_s)),
+        .nsec = @intCast(nanoseconds % std.time.ns_per_s),
+    };
+    while (true) switch (posix.errno(posix.system.nanosleep(&request, &request))) {
+        .SUCCESS => return,
+        .INTR => continue,
+        else => |err| std.debug.panic("unexpected errno: nanosleep: {}", .{err}),
+    };
+}
 
 /// A Signal is a way to trigger a registered callback on a IO instance when notification
 /// occurs from another thread.
@@ -201,7 +214,9 @@ test "signal" {
         fn notify(self: *Context) void {
             assert(std.Thread.getCurrentId() != self.main_thread_id);
             while (self.signal.status() != .shutdown_completed) {
-                std.time.sleep(delay + 1);
+                {
+                    sleep_ns(delay + 1);
+                }
 
                 // Triggering the event:
                 self.signal.notify();

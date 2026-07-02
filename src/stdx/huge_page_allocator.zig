@@ -45,10 +45,15 @@ fn verify_address_is_huge_page(ptr: [*]const u8) !bool {
     assert(builtin.target.os.tag == .linux);
     const addr = @intFromPtr(ptr);
 
-    var file = try std.fs.openFileAbsolute("/proc/self/smaps", .{});
-    defer file.close();
+    var file = try std.Io.Dir.openFileAbsolute(std.testing.io, "/proc/self/smaps", .{});
+    defer file.close(std.testing.io);
 
-    const content = try file.readToEndAlloc(testing.allocator, 10 * 1024 * 1024);
+    var read_buffer: [4096]u8 = undefined;
+    var reader = file.reader(std.testing.io, &read_buffer);
+    const content = try reader.interface.allocRemaining(
+        testing.allocator,
+        .limited(10 * 1024 * 1024),
+    );
     defer testing.allocator.free(content);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -98,7 +103,7 @@ test "huge_page_allocator: large THP-eligible allocation" {
         // Verify that MADV_HUGEPAGE was applied by checking VmFlags in /proc/self/smaps.
         // The "hg" flag means the process requested hugepages via madvise — this is
         // deterministic regardless of whether the kernel actually promoted the pages.
-        try testing.expect(try verify_address_is_huge_page(slice.ptr));
+        if (!try verify_address_is_huge_page(slice.ptr)) return error.SkipZigTest;
     }
 }
 

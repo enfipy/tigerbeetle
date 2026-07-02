@@ -650,7 +650,12 @@ const JNIHelper = struct {
         log.err(fmt, args);
 
         var buf: [256]u8 = undefined;
-        const message: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch |err| switch (err) {
+        const message: [:0]const u8 = std.fmt.bufPrintSentinel(
+            &buf,
+            fmt,
+            args,
+            0,
+        ) catch |err| switch (err) {
             error.NoSpaceLeft => blk: {
                 buf[255] = 0;
                 break :blk @ptrCast(buf[0..255]);

@@ -14,8 +14,8 @@
 //! - simplify and extend the API
 //! - remove dynamic-dispatch indirection (a minor bonus).
 
-const builtin = @import("builtin");
 const std = @import("std");
+const builtin = @import("builtin");
 const stdx = @import("stdx.zig");
 const assert = std.debug.assert;
 const math = std.math;
@@ -39,14 +39,7 @@ pub const Ratio = struct {
         return .{ .numerator = 0, .denominator = 1 };
     }
 
-    pub fn format(
-        r: Ratio,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+    pub fn format(r: Ratio, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         if (r.numerator == 0) return writer.print("0", .{});
         return writer.print("{d}/{d}", .{ r.numerator, r.denominator });
     }
@@ -163,7 +156,7 @@ test next {
     }
     try snap(@src(),
         \\{ 134, 134, 117, 121, 117, 128, 131, 118 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 pub fn fill(prng: *PRNG, target: []u8) void {
@@ -214,7 +207,7 @@ test fill {
 
     try snap(@src(),
         \\{ 3120, 3084, 3089, 3103, 3092, 3120, 3074, 3086 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 /// Generate an unbiased, uniformly distributed integer r such that 0 ≤ r ≤ max.
@@ -274,7 +267,7 @@ test int_inclusive {
     }
     try snap(@src(),
         \\{ 123, 127, 115, 125, 125, 139, 111, 135 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 
     var large: u32 = 0;
     var small: u32 = 0;
@@ -312,7 +305,7 @@ test index {
     }
     try snap(@src(),
         \\{ 9, 13, 13, 11, 10, 16, 16, 12 }
-    ).diff_fmt("{d}", .{distribution});
+    ).diff_fmt("{any}", .{distribution});
 }
 
 /// Generates a uniform, unbiased integer r such that max ≤ r ≤ max.
@@ -367,7 +360,7 @@ fn test_bytes_int(Int: type, want: Snap) !void {
     for (0..1000) |_| {
         distribution[@intCast(prng.int(Int) % 8)] += 1;
     }
-    try want.diff_fmt("{d}", .{distribution});
+    try want.diff_fmt("{any}", .{distribution});
 }
 
 /// Returns true with probability 0.5.
@@ -485,7 +478,7 @@ pub fn enum_weighted(prng: *PRNG, Enum: type, weights: EnumWeightsType(Enum)) En
 }
 
 fn enum_weighted_impl(prng: *PRNG, Enum: type, weights: anytype) Enum {
-    const fields = @typeInfo(Enum).@"enum".fields;
+    const fields = stdx.type_fields(Enum);
     var total: u64 = 0;
     inline for (fields) |field| {
         total += @field(weights, field.name);
@@ -676,17 +669,21 @@ test "no floating point please" {
     });
     defer std.testing.allocator.free(path);
 
-    const file_text = try std.fs.cwd().readFileAlloc(std.testing.allocator, path, 64 * KiB);
+    const file_text = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        path,
+        std.testing.allocator,
+        .limited(64 * KiB),
+    );
     defer std.testing.allocator.free(file_text);
 
     assert(std.mem.indexOf(u8, file_text, "f" ++ "32") == null);
     assert(std.mem.indexOf(u8, file_text, "f" ++ "64") == null);
 }
-
 // Automatically determine a reasonable amount of iterations for a unit fuzz-test, based on time.
 pub const FuzzIterations = struct {
     // Don't inject time for test-only code.
-    timer: ?std.time.Timer = null,
+    timer: ?stdx.InstantUnix = null,
     iteration: u32 = 0,
 
     iterations_min: u32 = 10,
@@ -694,12 +691,10 @@ pub const FuzzIterations = struct {
 
     pub fn more(clock: *FuzzIterations) bool {
         comptime assert(builtin.is_test);
-        if (clock.timer == null) {
-            clock.timer = std.time.Timer.start() catch @panic("timer failed");
-        }
+        if (clock.timer == null) clock.timer = stdx.InstantUnix.now();
 
         if (clock.iteration > clock.iterations_min and
-            clock.timer.?.read() > clock.duration_max.ns)
+            stdx.InstantUnix.now().ns - clock.timer.?.ns > clock.duration_max.ns)
         {
             return false;
         }

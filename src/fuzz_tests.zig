@@ -70,7 +70,7 @@ pub fn main() !void {
 
     fuzz.limit_ram();
 
-    var gpa_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var gpa_allocator: std.heap.DebugAllocator(.{}) = .{};
     // Disable "hint" argument for mmap call, which was observed to cause stack overflow.
     // See https://ziggit.dev/t/stack-probe-puzzle/10291/3 for the full story.
     gpa_allocator.backing_allocator = .{
@@ -150,13 +150,13 @@ fn main_smoke(gpa: std.mem.Allocator) !void {
         const fuzz_duration = timer_single.elapsed(time.monotonic());
         if (fuzz_duration.ns > 10 * std.time.ns_per_s) {
             log.err("fuzzer too slow for the smoke mode: " ++ @tagName(fuzzer) ++ " {}", .{
-                std.fmt.fmtDuration(fuzz_duration.ns),
+                stdx.fmt_duration(fuzz_duration.ns),
             });
         }
     }
 
     const elapsed = timer_all.elapsed(time.monotonic());
-    log.info("done in {}", .{std.fmt.fmtDuration(elapsed.ns)});
+    log.info("done in {}", .{stdx.fmt_duration(elapsed.ns)});
 }
 
 fn main_single(gpa: std.mem.Allocator, cli_args: CLIArgs) !void {
@@ -180,5 +180,5 @@ fn main_single(gpa: std.mem.Allocator, cli_args: CLIArgs) !void {
         }),
     }
     const elapsed = timer.elapsed(time.monotonic());
-    log.info("done in {}", .{std.fmt.fmtDuration(elapsed.ns)});
+    log.info("done in {}", .{stdx.fmt_duration(elapsed.ns)});
 }

@@ -724,7 +724,7 @@ pub const JNIEnv = opaque {
     /// Returns the major version number in the higher 16 bits
     /// and the minor version number in the lower 16 bits.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getversion.
-    pub inline fn get_version(
+    pub fn get_version(
         env: *JNIEnv,
     ) JInt {
         return JNIInterface.call(
@@ -735,7 +735,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#defineclass.
-    pub inline fn define_class(
+    pub fn define_class(
         env: *JNIEnv,
         name: [*:0]const u8,
         loader: JObject,
@@ -753,7 +753,7 @@ pub const JNIEnv = opaque {
     /// For example "java/lang/String"
     /// Returns a class object from a fully-qualified name, or NULL if the class cannot be found.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#findclass.
-    pub inline fn find_class(
+    pub fn find_class(
         env: *JNIEnv,
         name: [*:0]const u8,
     ) JClass {
@@ -765,7 +765,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#fromreflectedmethod
-    pub inline fn from_reflected_method(
+    pub fn from_reflected_method(
         env: *JNIEnv,
         jobject: JObject,
     ) JMethodID {
@@ -777,7 +777,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#fromfeflectedfield
-    pub inline fn from_feflected_field(
+    pub fn from_feflected_field(
         env: *JNIEnv,
         jobject: JObject,
     ) JFieldID {
@@ -789,7 +789,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#toreflectedmethod
-    pub inline fn to_reflected_method(
+    pub fn to_reflected_method(
         env: *JNIEnv,
         cls: JClass,
         method_id: JMethodID,
@@ -803,7 +803,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getsuperclass.
-    pub inline fn get_super_class(
+    pub fn get_super_class(
         env: *JNIEnv,
         clazz: JClass,
     ) JClass {
@@ -815,7 +815,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#isassignablefrom.
-    pub inline fn is_assignable_from(
+    pub fn is_assignable_from(
         env: *JNIEnv,
         clazz_1: JClass,
         clazz_2: JClass,
@@ -828,7 +828,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#toreflectedfield.
-    pub inline fn to_reflected_field(
+    pub fn to_reflected_field(
         env: *JNIEnv,
         cls: JClass,
         field_id: JFieldID,
@@ -842,7 +842,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#throw.
-    pub inline fn throw(
+    pub fn throw(
         env: *JNIEnv,
         obj: JThrowable,
     ) JNIResultType {
@@ -854,7 +854,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#thrownew.
-    pub inline fn throw_new(
+    pub fn throw_new(
         env: *JNIEnv,
         clazz: JClass,
         message: ?[*:0]const u8,
@@ -869,7 +869,7 @@ pub const JNIEnv = opaque {
     /// Returns the exception object that is currently in the process of being thrown,
     /// or NULL if no exception is currently being thrown.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#exceptionoccurred.
-    pub inline fn exception_occurred(
+    pub fn exception_occurred(
         env: *JNIEnv,
     ) JThrowable {
         return JNIInterface.call(
@@ -882,7 +882,7 @@ pub const JNIEnv = opaque {
     /// Prints an exception and a backtrace of the stack to a system error-reporting channel,
     /// such as stderr. This is a convenience routine provided for debugging.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#exceptiondescribe.
-    pub inline fn exception_describe(
+    pub fn exception_describe(
         env: *JNIEnv,
     ) void {
         JNIInterface.call(
@@ -895,7 +895,7 @@ pub const JNIEnv = opaque {
     /// Clears any exception that is currently being thrown.
     /// If no exception is currently being thrown, this routine has no effect.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#exceptionclear.
-    pub inline fn exception_clear(
+    pub fn exception_clear(
         env: *JNIEnv,
     ) void {
         JNIInterface.call(
@@ -908,7 +908,7 @@ pub const JNIEnv = opaque {
     /// Raises a fatal error and does not expect the VM to recover.
     /// This function does not return.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#fatalerror.
-    pub inline fn fatal_error(
+    pub fn fatal_error(
         env: *JNIEnv,
         msg: [*:0]const u8,
     ) noreturn {
@@ -921,7 +921,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#pushlocalframe.
-    pub inline fn push_local_frame(
+    pub fn push_local_frame(
         env: *JNIEnv,
         capacity: JInt,
     ) JNIResultType {
@@ -933,7 +933,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#poplocalframe.
-    pub inline fn pop_local_frame(
+    pub fn pop_local_frame(
         env: *JNIEnv,
         result: JObject,
     ) JObject {
@@ -950,7 +950,7 @@ pub const JNIEnv = opaque {
     /// - the system has run out of memory;
     /// - obj was a weak global reference and has already been garbage collected.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newglobalref.
-    pub inline fn new_global_ref(
+    pub fn new_global_ref(
         env: *JNIEnv,
         obj: JObject,
     ) JObject {
@@ -962,7 +962,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#deleteglobalref.
-    pub inline fn delete_global_ref(
+    pub fn delete_global_ref(
         env: *JNIEnv,
         global_ref: JObject,
     ) void {
@@ -974,7 +974,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#deletelocalref.
-    pub inline fn delete_local_ref(
+    pub fn delete_local_ref(
         env: *JNIEnv,
         local_ref: JObject,
     ) void {
@@ -986,7 +986,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#issameobject.
-    pub inline fn is_same_object(
+    pub fn is_same_object(
         env: *JNIEnv,
         ref_1: JObject,
         ref_2: JObject,
@@ -1000,7 +1000,7 @@ pub const JNIEnv = opaque {
 
     /// Returns NULL if ref refers to null.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newlocalref.
-    pub inline fn new_local_ref(
+    pub fn new_local_ref(
         env: *JNIEnv,
         ref: JObject,
     ) JObject {
@@ -1012,7 +1012,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#ensurelocalcapacity.
-    pub inline fn ensure_local_capacity(
+    pub fn ensure_local_capacity(
         env: *JNIEnv,
         capacity: JInt,
     ) JNIResultType {
@@ -1026,7 +1026,7 @@ pub const JNIEnv = opaque {
     /// Allocates a new Java object *without* invoking the constructor.
     /// Returns a reference to the object.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#allocobject.
-    pub inline fn alloc_object(
+    pub fn alloc_object(
         env: *JNIEnv,
         clazz: JClass,
     ) JObject {
@@ -1039,7 +1039,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java object, or NULL if the object cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newobject.
-    pub inline fn new_object(
+    pub fn new_object(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1053,7 +1053,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getobjectclass.
-    pub inline fn get_object_class(
+    pub fn get_object_class(
         env: *JNIEnv,
         jobject: JObject,
     ) JClass {
@@ -1065,7 +1065,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#isinstanceof.
-    pub inline fn is_instance_of(
+    pub fn is_instance_of(
         env: *JNIEnv,
         jobject: JObject,
         clazz: JClass,
@@ -1078,7 +1078,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getmethodid.
-    pub inline fn get_method_id(
+    pub fn get_method_id(
         env: *JNIEnv,
         clazz: JClass,
         name: [*:0]const u8,
@@ -1092,7 +1092,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_object_method(
+    pub fn call_object_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1106,7 +1106,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_boolean_method(
+    pub fn call_boolean_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1120,7 +1120,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_byte_method(
+    pub fn call_byte_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1134,7 +1134,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_char_method(
+    pub fn call_char_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1148,7 +1148,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_short_method(
+    pub fn call_short_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1162,7 +1162,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_int_method(
+    pub fn call_int_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1176,7 +1176,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_long_method(
+    pub fn call_long_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1190,7 +1190,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_float_method(
+    pub fn call_float_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1204,7 +1204,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_double_method(
+    pub fn call_double_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1218,7 +1218,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#calltypemethod-routines-calltypemethoda-routines-calltypemethodv-routines.
-    pub inline fn call_void_method(
+    pub fn call_void_method(
         env: *JNIEnv,
         obj: JObject,
         method_id: JMethodID,
@@ -1232,7 +1232,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_object_method(
+    pub fn call_nonvirtual_object_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1247,7 +1247,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_boolean_method(
+    pub fn call_nonvirtual_boolean_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1262,7 +1262,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_byte_method(
+    pub fn call_nonvirtual_byte_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1277,7 +1277,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_char_method(
+    pub fn call_nonvirtual_char_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1292,7 +1292,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_short_method(
+    pub fn call_nonvirtual_short_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1307,7 +1307,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_int_method(
+    pub fn call_nonvirtual_int_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1322,7 +1322,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_long_method(
+    pub fn call_nonvirtual_long_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1337,7 +1337,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_float_method(
+    pub fn call_nonvirtual_float_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1352,7 +1352,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_double_method(
+    pub fn call_nonvirtual_double_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1367,7 +1367,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callnonvirtualtypemethod-routines-callnonvirtualtypemethoda-routines-callnonvirtualtypemethodv-routines.
-    pub inline fn call_nonvirtual_void_method(
+    pub fn call_nonvirtual_void_method(
         env: *JNIEnv,
         obj: JObject,
         clazz: JClass,
@@ -1382,7 +1382,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getfieldid.
-    pub inline fn get_field_id(
+    pub fn get_field_id(
         env: *JNIEnv,
         clazz: JClass,
         name: [*:0]const u8,
@@ -1396,7 +1396,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_object_field(
+    pub fn get_object_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1409,7 +1409,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_boolean_field(
+    pub fn get_boolean_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1422,7 +1422,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_byte_field(
+    pub fn get_byte_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1435,7 +1435,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_char_field(
+    pub fn get_char_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1448,7 +1448,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_short_field(
+    pub fn get_short_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1461,7 +1461,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_int_field(
+    pub fn get_int_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1474,7 +1474,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_long_field(
+    pub fn get_long_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1487,7 +1487,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_float_field(
+    pub fn get_float_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1500,7 +1500,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#gettypefield-routines.
-    pub inline fn get_double_field(
+    pub fn get_double_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1513,7 +1513,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_object_field(
+    pub fn set_object_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1527,7 +1527,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_boolean_field(
+    pub fn set_boolean_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1541,7 +1541,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_byte_field(
+    pub fn set_byte_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1555,7 +1555,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_char_field(
+    pub fn set_char_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1569,7 +1569,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_short_field(
+    pub fn set_short_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1583,7 +1583,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_int_field(
+    pub fn set_int_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1597,7 +1597,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_long_field(
+    pub fn set_long_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1611,7 +1611,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_float_field(
+    pub fn set_float_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1625,7 +1625,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#settypefield-routines.
-    pub inline fn set_double_field(
+    pub fn set_double_field(
         env: *JNIEnv,
         obj: JObject,
         field_id: JFieldID,
@@ -1639,7 +1639,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstaticmethodid.
-    pub inline fn get_static_method_id(
+    pub fn get_static_method_id(
         env: *JNIEnv,
         clazz: JClass,
         name: [*:0]const u8,
@@ -1653,7 +1653,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_object_method(
+    pub fn call_static_object_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1667,7 +1667,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_boolean_method(
+    pub fn call_static_boolean_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1681,7 +1681,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_byte_method(
+    pub fn call_static_byte_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1695,7 +1695,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_char_method(
+    pub fn call_static_char_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1709,7 +1709,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_short_method(
+    pub fn call_static_short_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1723,7 +1723,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_int_method(
+    pub fn call_static_int_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1737,7 +1737,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_long_method(
+    pub fn call_static_long_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1751,7 +1751,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_float_method(
+    pub fn call_static_float_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1765,7 +1765,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_double_method(
+    pub fn call_static_double_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1779,7 +1779,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#callstatictypemethod-routines-callstatictypemethoda-routines-callstatictypemethodv-routines.
-    pub inline fn call_static_void_method(
+    pub fn call_static_void_method(
         env: *JNIEnv,
         clazz: JClass,
         method_id: JMethodID,
@@ -1794,7 +1794,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a field ID, or NULL if the specified static field cannot be found.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstaticfieldid.
-    pub inline fn get_static_field_id(
+    pub fn get_static_field_id(
         env: *JNIEnv,
         clazz: JClass,
         name: [*:0]const u8,
@@ -1808,7 +1808,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_object_field(
+    pub fn get_static_object_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1821,7 +1821,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_boolean_field(
+    pub fn get_static_boolean_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1834,7 +1834,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_byte_field(
+    pub fn get_static_byte_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1847,7 +1847,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_char_field(
+    pub fn get_static_char_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1860,7 +1860,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_short_field(
+    pub fn get_static_short_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1873,7 +1873,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_int_field(
+    pub fn get_static_int_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1886,7 +1886,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_long_field(
+    pub fn get_static_long_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1899,7 +1899,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_float_field(
+    pub fn get_static_float_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1912,7 +1912,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn get_static_double_field(
+    pub fn get_static_double_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1925,7 +1925,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstatictypefield-routines.
-    pub inline fn set_static_object_field(
+    pub fn set_static_object_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1939,7 +1939,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_boolean_field(
+    pub fn set_static_boolean_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1953,7 +1953,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_byte_field(
+    pub fn set_static_byte_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1967,7 +1967,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_char_field(
+    pub fn set_static_char_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1981,7 +1981,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_short_field(
+    pub fn set_static_short_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -1995,7 +1995,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_int_field(
+    pub fn set_static_int_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -2009,7 +2009,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_long_field(
+    pub fn set_static_long_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -2023,7 +2023,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_float_field(
+    pub fn set_static_float_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -2037,7 +2037,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setstatictypefield-routines.
-    pub inline fn set_static_double_field(
+    pub fn set_static_double_field(
         env: *JNIEnv,
         clazz: JClass,
         field_id: JFieldID,
@@ -2051,7 +2051,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newstring.
-    pub inline fn new_string(
+    pub fn new_string(
         env: *JNIEnv,
         unicode_chars: [*]const JChar,
         size: JSize,
@@ -2064,7 +2064,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringlength.
-    pub inline fn get_string_length(
+    pub fn get_string_length(
         env: *JNIEnv,
         string: JString,
     ) JSize {
@@ -2080,7 +2080,7 @@ pub const JNIEnv = opaque {
     /// If is_copy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringchars.
-    pub inline fn get_string_chars(
+    pub fn get_string_chars(
         env: *JNIEnv,
         string: JString,
         is_copy: ?*JBoolean,
@@ -2093,7 +2093,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releasestringchars.
-    pub inline fn release_string_chars(
+    pub fn release_string_chars(
         env: *JNIEnv,
         string: JString,
         chars: [*]const JChar,
@@ -2106,7 +2106,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newstringutf.
-    pub inline fn new_string_utf(
+    pub fn new_string_utf(
         env: *JNIEnv,
         bytes: [*:0]const u8,
     ) JString {
@@ -2118,7 +2118,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringutflength.
-    pub inline fn get_string_utf_length(
+    pub fn get_string_utf_length(
         env: *JNIEnv,
         string: JString,
     ) JSize {
@@ -2134,7 +2134,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringutfchars.
-    pub inline fn get_string_utf_chars(
+    pub fn get_string_utf_chars(
         env: *JNIEnv,
         string: JString,
         is_copy: ?*JBoolean,
@@ -2147,7 +2147,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releasestringutfchars.
-    pub inline fn release_string_utf_chars(
+    pub fn release_string_utf_chars(
         env: *JNIEnv,
         string: JString,
         utf: [*:0]const u8,
@@ -2160,7 +2160,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getarraylength.
-    pub inline fn get_array_length(
+    pub fn get_array_length(
         env: *JNIEnv,
         array: JArray,
     ) JSize {
@@ -2175,7 +2175,7 @@ pub const JNIEnv = opaque {
     /// All elements are initially set to initialElement.
     /// Returns a Java array object, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newobjectarray.
-    pub inline fn new_object_array(
+    pub fn new_object_array(
         env: *JNIEnv,
         length: JSize,
         element_class: JClass,
@@ -2189,7 +2189,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getobjectarrayelement.
-    pub inline fn get_object_array_element(
+    pub fn get_object_array_element(
         env: *JNIEnv,
         array: JObjectArray,
         index: JSize,
@@ -2202,7 +2202,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setobjectarrayelement.
-    pub inline fn set_object_array_element(
+    pub fn set_object_array_element(
         env: *JNIEnv,
         array: JObjectArray,
         index: JSize,
@@ -2217,7 +2217,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_boolean_array(
+    pub fn new_boolean_array(
         env: *JNIEnv,
         length: JSize,
     ) JBooleanArray {
@@ -2230,7 +2230,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_byte_array(
+    pub fn new_byte_array(
         env: *JNIEnv,
         length: JSize,
     ) JByteArray {
@@ -2243,7 +2243,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_char_array(
+    pub fn new_char_array(
         env: *JNIEnv,
         length: JSize,
     ) JCharArray {
@@ -2256,7 +2256,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_short_array(
+    pub fn new_short_array(
         env: *JNIEnv,
         length: JSize,
     ) JShortArray {
@@ -2269,7 +2269,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_int_array(
+    pub fn new_int_array(
         env: *JNIEnv,
         length: JSize,
     ) JIntArray {
@@ -2282,7 +2282,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_long_array(
+    pub fn new_long_array(
         env: *JNIEnv,
         length: JSize,
     ) JLongArray {
@@ -2295,7 +2295,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_float_array(
+    pub fn new_float_array(
         env: *JNIEnv,
         length: JSize,
     ) JFloatArray {
@@ -2308,7 +2308,7 @@ pub const JNIEnv = opaque {
 
     /// Returns a Java array, or NULL if the array cannot be constructed.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newprimitivetypearray-routines.
-    pub inline fn new_double_array(
+    pub fn new_double_array(
         env: *JNIEnv,
         length: JSize,
     ) JDoubleArray {
@@ -2324,7 +2324,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_boolean_array_elements(
+    pub fn get_boolean_array_elements(
         env: *JNIEnv,
         array: JBooleanArray,
         is_copy: ?*JBoolean,
@@ -2341,7 +2341,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_byte_array_elements(
+    pub fn get_byte_array_elements(
         env: *JNIEnv,
         array: JByteArray,
         is_copy: ?*JBoolean,
@@ -2358,7 +2358,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_char_array_elements(
+    pub fn get_char_array_elements(
         env: *JNIEnv,
         array: JCharArray,
         is_copy: ?*JBoolean,
@@ -2375,7 +2375,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_short_array_elements(
+    pub fn get_short_array_elements(
         env: *JNIEnv,
         array: JShortArray,
         is_copy: ?*JBoolean,
@@ -2392,7 +2392,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_int_array_elements(
+    pub fn get_int_array_elements(
         env: *JNIEnv,
         array: JIntArray,
         is_copy: ?*JBoolean,
@@ -2409,7 +2409,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_long_array_elements(
+    pub fn get_long_array_elements(
         env: *JNIEnv,
         array: JLongArray,
         is_copy: ?*JBoolean,
@@ -2426,7 +2426,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_float_array_elements(
+    pub fn get_float_array_elements(
         env: *JNIEnv,
         array: JFloatArray,
         is_copy: ?*JBoolean,
@@ -2444,7 +2444,7 @@ pub const JNIEnv = opaque {
     /// If isCopy is not NULL, then *is_copy is set to true if a copy is made,
     /// or it is set to false if no copy is made.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayelements-routines.
-    pub inline fn get_double_array_elements(
+    pub fn get_double_array_elements(
         env: *JNIEnv,
         array: JDoubleArray,
         is_copy: ?*JBoolean,
@@ -2457,7 +2457,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_boolean_array_elements(
+    pub fn release_boolean_array_elements(
         env: *JNIEnv,
         array: JBooleanArray,
         elems: [*]JBoolean,
@@ -2471,7 +2471,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_byte_array_elements(
+    pub fn release_byte_array_elements(
         env: *JNIEnv,
         array: JByteArray,
         elems: [*]JByte,
@@ -2485,7 +2485,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_char_array_elements(
+    pub fn release_char_array_elements(
         env: *JNIEnv,
         array: JCharArray,
         elems: [*]JChar,
@@ -2499,7 +2499,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_short_array_elements(
+    pub fn release_short_array_elements(
         env: *JNIEnv,
         array: JShortArray,
         elems: [*]JShort,
@@ -2513,7 +2513,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_int_array_elements(
+    pub fn release_int_array_elements(
         env: *JNIEnv,
         array: JIntArray,
         elems: [*]JInt,
@@ -2527,7 +2527,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_long_array_elements(
+    pub fn release_long_array_elements(
         env: *JNIEnv,
         array: JLongArray,
         elems: [*]JLong,
@@ -2541,7 +2541,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_float_array_elements(
+    pub fn release_float_array_elements(
         env: *JNIEnv,
         array: JFloatArray,
         elems: [*]JFloat,
@@ -2555,7 +2555,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivetypearrayelements-routines.
-    pub inline fn release_double_array_elements(
+    pub fn release_double_array_elements(
         env: *JNIEnv,
         array: JDoubleArray,
         elems: [*]JDouble,
@@ -2569,7 +2569,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_boolean_array_region(
+    pub fn get_boolean_array_region(
         env: *JNIEnv,
         array: JBooleanArray,
         start: JSize,
@@ -2584,7 +2584,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_byte_array_region(
+    pub fn get_byte_array_region(
         env: *JNIEnv,
         array: JByteArray,
         start: JSize,
@@ -2599,7 +2599,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_char_array_region(
+    pub fn get_char_array_region(
         env: *JNIEnv,
         array: JCharArray,
         start: JSize,
@@ -2614,7 +2614,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_short_array_region(
+    pub fn get_short_array_region(
         env: *JNIEnv,
         array: JShortArray,
         start: JSize,
@@ -2629,7 +2629,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_int_array_region(
+    pub fn get_int_array_region(
         env: *JNIEnv,
         array: JIntArray,
         start: JSize,
@@ -2644,7 +2644,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_long_array_region(
+    pub fn get_long_array_region(
         env: *JNIEnv,
         array: JLongArray,
         start: JSize,
@@ -2659,7 +2659,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_float_array_region(
+    pub fn get_float_array_region(
         env: *JNIEnv,
         array: JFloatArray,
         start: JSize,
@@ -2674,7 +2674,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivetypearrayregion-routines.
-    pub inline fn get_double_array_region(
+    pub fn get_double_array_region(
         env: *JNIEnv,
         array: JDoubleArray,
         start: JSize,
@@ -2689,7 +2689,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_boolean_array_region(
+    pub fn set_boolean_array_region(
         env: *JNIEnv,
         array: JBooleanArray,
         start: JSize,
@@ -2704,7 +2704,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_byte_array_region(
+    pub fn set_byte_array_region(
         env: *JNIEnv,
         array: JByteArray,
         start: JSize,
@@ -2719,7 +2719,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_char_array_region(
+    pub fn set_char_array_region(
         env: *JNIEnv,
         array: JCharArray,
         start: JSize,
@@ -2734,7 +2734,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_short_array_region(
+    pub fn set_short_array_region(
         env: *JNIEnv,
         array: JShortArray,
         start: JSize,
@@ -2749,7 +2749,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_int_array_region(
+    pub fn set_int_array_region(
         env: *JNIEnv,
         array: JIntArray,
         start: JSize,
@@ -2764,7 +2764,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_long_array_region(
+    pub fn set_long_array_region(
         env: *JNIEnv,
         array: JLongArray,
         start: JSize,
@@ -2779,7 +2779,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_float_array_region(
+    pub fn set_float_array_region(
         env: *JNIEnv,
         array: JFloatArray,
         start: JSize,
@@ -2794,7 +2794,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#setprimitivetypearrayregion-routines.
-    pub inline fn set_double_array_region(
+    pub fn set_double_array_region(
         env: *JNIEnv,
         array: JDoubleArray,
         start: JSize,
@@ -2809,7 +2809,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#registernatives.
-    pub inline fn register_natives(
+    pub fn register_natives(
         env: *JNIEnv,
         clazz: JClass,
         methods: [*]const JNINativeMethod,
@@ -2823,7 +2823,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#unregisternatives.
-    pub inline fn unregister_natives(
+    pub fn unregister_natives(
         env: *JNIEnv,
         clazz: JClass,
     ) JNIResultType {
@@ -2835,7 +2835,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#monitorenter.
-    pub inline fn monitor_enter(
+    pub fn monitor_enter(
         env: *JNIEnv,
         obj: JObject,
     ) JNIResultType {
@@ -2847,7 +2847,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#monitorexit.
-    pub inline fn monitor_exit(
+    pub fn monitor_exit(
         env: *JNIEnv,
         obj: JObject,
     ) JNIResultType {
@@ -2859,7 +2859,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getjavavm.
-    pub inline fn get_java_vm(
+    pub fn get_java_vm(
         env: *JNIEnv,
         vm: **JavaVM,
     ) JNIResultType {
@@ -2871,7 +2871,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringregion.
-    pub inline fn get_string_region(
+    pub fn get_string_region(
         env: *JNIEnv,
         string: JString,
         start: JSize,
@@ -2886,7 +2886,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringutfregion.
-    pub inline fn get_string_utf_region(
+    pub fn get_string_utf_region(
         env: *JNIEnv,
         string: JString,
         start: JSize,
@@ -2901,7 +2901,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getprimitivearraycritical.
-    pub inline fn get_primitive_array_critical(
+    pub fn get_primitive_array_critical(
         env: *JNIEnv,
         array: JArray,
         is_copy: ?*JBoolean,
@@ -2914,7 +2914,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#releaseprimitivearraycritical.
-    pub inline fn release_primitive_array_critical(
+    pub fn release_primitive_array_critical(
         env: *JNIEnv,
         array: JArray,
         c_array: *anyopaque,
@@ -2928,7 +2928,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringcritical-releasestringcritical.
-    pub inline fn get_string_critical(
+    pub fn get_string_critical(
         env: *JNIEnv,
         string: JString,
         is_copy: ?*JBoolean,
@@ -2941,7 +2941,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getstringcritical-releasestringcritical.
-    pub inline fn release_string_critical(
+    pub fn release_string_critical(
         env: *JNIEnv,
         string: JString,
         chars: [*]const JChar,
@@ -2955,7 +2955,7 @@ pub const JNIEnv = opaque {
 
     /// Returns NULL if obj refers to null, or if the VM runs out of memory.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newweakglobalref.
-    pub inline fn new_weak_global_ref(
+    pub fn new_weak_global_ref(
         env: *JNIEnv,
         obj: JObject,
     ) JWeakReference {
@@ -2967,7 +2967,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#deleteweakglobalref.
-    pub inline fn delete_weak_global_ref(
+    pub fn delete_weak_global_ref(
         env: *JNIEnv,
         ref: JWeakReference,
     ) void {
@@ -2980,7 +2980,7 @@ pub const JNIEnv = opaque {
 
     /// Returns true when there is a pending exception; otherwise, returns false.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#exceptioncheck.
-    pub inline fn exception_check(
+    pub fn exception_check(
         env: *JNIEnv,
     ) JBoolean {
         return JNIInterface.call(
@@ -2994,7 +2994,7 @@ pub const JNIEnv = opaque {
     /// Returns NULL if an exception occurs,
     /// or if JNI access to direct buffers is not supported by this virtual machine.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#newdirectbytebuffer.
-    pub inline fn new_direct_byte_buffer(
+    pub fn new_direct_byte_buffer(
         env: *JNIEnv,
         address: *anyopaque,
         capacity: JLong,
@@ -3011,7 +3011,7 @@ pub const JNIEnv = opaque {
     /// if the given object is not a direct java.nio.Buffer,
     /// or if JNI access to direct buffers is not supported by this virtual machine.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getdirectbufferaddress.
-    pub inline fn get_direct_buffer_address(
+    pub fn get_direct_buffer_address(
         env: *JNIEnv,
         buf: JObject,
     ) ?[*]u8 {
@@ -3028,7 +3028,7 @@ pub const JNIEnv = opaque {
     /// does not support unaligned access,
     /// or if JNI access to direct buffers is not supported by this virtual machine.
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getdirectbuffercapacity.
-    pub inline fn get_direct_buffer_capacity(
+    pub fn get_direct_buffer_capacity(
         env: *JNIEnv,
         buf: JObject,
     ) JLong {
@@ -3040,7 +3040,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getobjectreftype.
-    pub inline fn get_object_ref_type(
+    pub fn get_object_ref_type(
         env: *JNIEnv,
         obj: JObject,
     ) JObjectRefType {
@@ -3052,7 +3052,7 @@ pub const JNIEnv = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/functions.html#getmodule.
-    pub inline fn get_module(
+    pub fn get_module(
         env: *JNIEnv,
         clazz: JClass,
     ) JObject {
@@ -3136,7 +3136,7 @@ pub const JavaVM = opaque {
     const JNIInterface = JNIInterfaceType(JavaVM);
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/invocation.html#destroyjavavm.
-    pub inline fn destroy_java_vm(
+    pub fn destroy_java_vm(
         vm: *JavaVM,
     ) JNIResultType {
         return JNIInterface.call(
@@ -3147,7 +3147,7 @@ pub const JavaVM = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/invocation.html#attachcurrentthread.
-    pub inline fn attach_current_thread(
+    pub fn attach_current_thread(
         vm: *JavaVM,
         env: **JNIEnv,
         args: ?*JavaVMAttachArgs,
@@ -3160,7 +3160,7 @@ pub const JavaVM = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/invocation.html#detachcurrentthread.
-    pub inline fn detach_current_thread(
+    pub fn detach_current_thread(
         vm: *JavaVM,
     ) JNIResultType {
         return JNIInterface.call(
@@ -3171,7 +3171,7 @@ pub const JavaVM = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/invocation.html#attach_currentthreadasdaemon.
-    pub inline fn attach_current_thread_as_daemon(
+    pub fn attach_current_thread_as_daemon(
         vm: *JavaVM,
         env: **JNIEnv,
         args: ?*JavaVMAttachArgs,
@@ -3184,7 +3184,7 @@ pub const JavaVM = opaque {
     }
 
     /// https://docs.oracle.com/en/java/javase/17/docs/specs/jni/invocation.html#getenv
-    pub inline fn get_env(
+    pub fn get_env(
         vm: *JavaVM,
         env: **JNIEnv,
         version: JInt,
@@ -3205,17 +3205,13 @@ fn JNIInterfaceType(comptime T: type) type {
     return struct {
         fn JniFnType(comptime function: T.FunctionTable) type {
             const Fn = @TypeOf(@field(T, @tagName(function)));
-            var fn_info = @typeInfo(Fn);
-            switch (fn_info) {
-                .@"fn" => {
-                    fn_info.@"fn".calling_convention = .c;
-                    return @Type(fn_info);
-                },
+            switch (@typeInfo(Fn)) {
+                .@"fn" => return Fn,
                 else => @compileError("Expected " ++ @tagName(function) ++ " to be a function"),
             }
         }
 
-        pub inline fn call(
+        pub fn call(
             self: *T,
             comptime function: T.FunctionTable,
             args: anytype,

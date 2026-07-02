@@ -69,7 +69,8 @@ const type_mappings = .{
         .docs_link = "reference/account#",
     } },
     .{
-        tb.Transfer, TypeMapping{
+        tb.Transfer,
+        TypeMapping{
             .name = "Transfer",
             .visibility = .public,
             .private_fields = &.{"reserved"},
@@ -170,7 +171,7 @@ fn dotnet_type(comptime Type: type) []const u8 {
         },
         .pointer => |info| {
             assert(info.size != .slice);
-            assert(!info.is_allowzero);
+            assert(!info.attrs.@"allowzero");
 
             return if (comptime get_mapped_type_name(info.child)) |name|
                 name ++ "*"
@@ -191,7 +192,7 @@ fn get_mapped_type_name(comptime Type: type) ?[]const u8 {
 }
 
 fn emit_enum(
-    buffer: *std.ArrayList(u8),
+    buffer: *std.array_list.Managed(u8),
     comptime Type: type,
     comptime type_info: anytype,
     comptime mapping: TypeMapping,
@@ -201,10 +202,10 @@ fn emit_enum(
     if (is_packed_struct) {
         assert(type_info.layout == .@"packed");
         // Packed structs represented as Enum needs a Flags attribute:
-        try buffer.writer().print("[Flags]\n", .{});
+        try buffer.print("[Flags]\n", .{});
     }
 
-    try buffer.writer().print(
+    try buffer.print(
         \\{s} enum {s} : {s}
         \\{{
         \\
@@ -216,26 +217,26 @@ fn emit_enum(
 
     if (is_packed_struct) {
         // Packed structs represented as Enum needs a ZERO value:
-        try buffer.writer().print(
+        try buffer.print(
             \\    None = 0,
             \\
             \\
         , .{});
     }
 
-    inline for (type_info.fields, 0..) |field, i| {
+    inline for (stdx.type_fields(Type), 0..) |field, i| {
         if (comptime mapping.is_private(field.name)) continue;
         if (comptime std.mem.startsWith(u8, field.name, "deprecated_")) continue;
 
         try emit_docs(buffer, mapping, field.name);
         if (is_packed_struct) {
-            try buffer.writer().print("    {s} = 1 << {},\n\n", .{
+            try buffer.print("    {s} = 1 << {},\n\n", .{
                 stdx.to_case(field.name, .PascalCase),
                 i,
             });
         } else {
             const int_value = @intFromEnum(@field(Type, field.name));
-            try buffer.writer().print("    {s} = {s},\n\n", .{
+            try buffer.print("    {s} = {s},\n\n", .{
                 stdx.to_case(field.name, .PascalCase),
                 if (int_value == std.math.maxInt(@TypeOf(int_value)))
                     std.fmt.comptimePrint("0x{X}", .{int_value})
@@ -245,7 +246,7 @@ fn emit_enum(
         }
     }
 
-    try buffer.writer().print(
+    try buffer.print(
         \\}}
         \\
         \\
@@ -253,12 +254,12 @@ fn emit_enum(
 }
 
 fn emit_struct(
-    buffer: *std.ArrayList(u8),
-    comptime type_info: anytype,
+    buffer: *std.array_list.Managed(u8),
+    comptime Type: type,
     comptime mapping: TypeMapping,
     comptime size: usize,
 ) !void {
-    try buffer.writer().print(
+    try buffer.print(
         \\[StructLayout(LayoutKind.Sequential, Size = SIZE)]
         \\{s} {s}struct {s}
         \\{{
@@ -277,10 +278,10 @@ fn emit_struct(
     // Fixed len array are exposed as internal structs with stackalloc fields
     // It's more efficient than exposing heap-allocated arrays using
     // [MarshalAs(UnmanagedType.ByValArray)] attribute.
-    inline for (type_info.fields) |field| {
+    inline for (stdx.type_fields(Type)) |field| {
         switch (@typeInfo(field.type)) {
             .array => |array| {
-                try buffer.writer().print(
+                try buffer.print(
                     \\    [StructLayout(LayoutKind.Sequential, Size = {[name]s}Data.SIZE)]
                     \\    private unsafe struct {[name]s}Data
                     \\    {{
@@ -327,11 +328,11 @@ fn emit_struct(
     }
 
     // Fields
-    inline for (type_info.fields) |field| {
+    inline for (stdx.type_fields(Type)) |field| {
         const is_private = comptime mapping.is_private(field.name);
 
         switch (@typeInfo(field.type)) {
-            .array => try buffer.writer().print(
+            .array => try buffer.print(
                 \\    {s} {s}Data {s};
                 \\
                 \\
@@ -342,7 +343,7 @@ fn emit_struct(
                     stdx.to_case(field.name, .camelCase),
                 },
             ),
-            else => try buffer.writer().print(
+            else => try buffer.print(
                 \\    {s} {s} {s};
                 \\
                 \\
@@ -359,14 +360,14 @@ fn emit_struct(
     if (mapping.visibility == .public) {
 
         // Properties
-        inline for (type_info.fields) |field| {
+        inline for (stdx.type_fields(Type)) |field| {
             try emit_docs(buffer, mapping, field.name);
 
             const is_private = comptime mapping.is_private(field.name);
             const is_read_only = comptime mapping.is_read_only(field.name);
 
             switch (@typeInfo(field.type)) {
-                .array => try buffer.writer().print(
+                .array => try buffer.print(
                     \\    {s} byte[] {s} {{ get => {s}.GetData(); {s}set => {s}.SetData(value); }}
                     \\
                     \\
@@ -377,7 +378,7 @@ fn emit_struct(
                     if (is_read_only and !is_private) "internal " else "",
                     stdx.to_case(field.name, .camelCase),
                 }),
-                else => try buffer.writer().print(
+                else => try buffer.print(
                     \\    {s} {s} {s} {{ get => {s}; {s}set => {s} = value; }}
                     \\
                     \\
@@ -393,7 +394,7 @@ fn emit_struct(
         }
     }
 
-    try buffer.writer().print(
+    try buffer.print(
         \\}}
         \\
         \\
@@ -402,7 +403,7 @@ fn emit_struct(
 
 fn emit_docs(buffer: anytype, comptime mapping: TypeMapping, comptime field: ?[]const u8) !void {
     if (mapping.docs_link) |docs_link| {
-        try buffer.writer().print(
+        try buffer.print(
             \\    /// <summary>
             \\    /// https://docs.tigerbeetle.com/{s}{s}
             \\    /// </summary>
@@ -414,10 +415,10 @@ fn emit_docs(buffer: anytype, comptime mapping: TypeMapping, comptime field: ?[]
     }
 }
 
-pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
+pub fn generate_bindings(buffer: *std.array_list.Managed(u8)) !void {
     @setEvalBranchQuota(100_000);
 
-    try buffer.writer().print(
+    try buffer.print(
         \\//////////////////////////////////////////////////////////
         \\// This file was auto-generated by dotnet_bindings.zig  //
         \\//              Do not manually modify.                 //
@@ -447,12 +448,12 @@ pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
                     info,
                     mapping,
                     comptime dotnet_type(
-                        std.meta.Int(.unsigned, @bitSizeOf(ZigType)),
+                        @Int(.unsigned, @bitSizeOf(ZigType)),
                     ),
                 ),
                 .@"extern" => try emit_struct(
                     buffer,
-                    info,
+                    ZigType,
                     mapping,
                     @sizeOf(ZigType),
                 ),
@@ -462,7 +463,7 @@ pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
                 ZigType,
                 info,
                 mapping,
-                comptime dotnet_type(std.meta.Int(.unsigned, @bitSizeOf(ZigType))),
+                comptime dotnet_type(@Int(.unsigned, @bitSizeOf(ZigType))),
             ),
             else => @compileError("Type cannot be represented: " ++ @typeName(ZigType)),
         }
@@ -471,7 +472,7 @@ pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
     // Emit function declarations.
     // TODO: use `std.meta.declaractions` and generate with pub + export functions.
     // Zig 0.9.1 has `decl.data.Fn.arg_names` but it's currently/incorrectly a zero-sized slice.
-    try buffer.writer().print(
+    try buffer.print(
         \\internal static class Native
         \\{{
         \\    private const string LIB_NAME = "tb_client";
@@ -516,13 +517,16 @@ pub fn generate_bindings(buffer: *std.ArrayList(u8)) !void {
     , .{});
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var buffer = std.ArrayList(u8).init(allocator);
+    var buffer = std.array_list.Managed(u8).init(allocator);
     try generate_bindings(&buffer);
 
-    try std.io.getStdOut().writeAll(buffer.items);
+    var stdout_buffer: [std.heap.page_size_min]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    try stdout_writer.interface.writeAll(buffer.items);
+    try stdout_writer.interface.flush();
 }

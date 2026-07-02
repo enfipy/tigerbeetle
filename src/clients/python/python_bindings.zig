@@ -39,16 +39,16 @@ const mappings_state_machine = .{
 const mappings_all = mappings_vsr ++ mappings_state_machine;
 
 const Buffer = struct {
-    inner: std.ArrayList(u8),
+    inner: std.array_list.Managed(u8),
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
-            .inner = std.ArrayList(u8).init(allocator),
+            .inner = std.array_list.Managed(u8).init(allocator),
         };
     }
 
     pub fn print(self: *Buffer, comptime format: []const u8, args: anytype) void {
-        self.inner.writer().print(format, args) catch unreachable;
+        self.inner.print(format, args) catch unreachable;
     }
 };
 
@@ -75,7 +75,7 @@ fn zig_to_ctype(comptime Type: type) []const u8 {
             });
         },
         .@"enum" => |info| return zig_to_ctype(info.tag_type),
-        .@"struct" => return zig_to_ctype(std.meta.Int(.unsigned, @bitSizeOf(Type))),
+        .@"struct" => return zig_to_ctype(@Int(.unsigned, @bitSizeOf(Type))),
         .bool => return "ctypes.c_bool",
         .int => |info| {
             assert(info.signedness == .unsigned);
@@ -94,7 +94,7 @@ fn zig_to_ctype(comptime Type: type) []const u8 {
         },
         .pointer => |info| {
             assert(info.size == .one);
-            assert(!info.is_allowzero);
+            assert(!info.attrs.@"allowzero");
 
             if (Type == *anyopaque) {
                 return "ctypes.c_void_p";
@@ -142,7 +142,6 @@ fn zig_to_python(comptime Type: type) []const u8 {
 fn emit_enum(
     buffer: *Buffer,
     comptime Type: type,
-    comptime type_info: anytype,
     comptime python_name: []const u8,
     comptime skip_fields: []const []const u8,
 ) !void {
@@ -156,7 +155,7 @@ fn emit_enum(
         buffer.print("    NONE = 0\n", .{});
     }
 
-    inline for (type_info.fields, 0..) |field, i| {
+    inline for (stdx.type_fields(Type), 0..) |field, i| {
         if (comptime std.mem.startsWith(u8, field.name, "deprecated_")) continue;
         comptime var skip = false;
         inline for (skip_fields) |sf| {
@@ -189,7 +188,7 @@ fn emit_enum(
 
 fn emit_struct_ctypes(
     buffer: *Buffer,
-    comptime type_info: anytype,
+    comptime Type: type,
     comptime python_name: []const u8,
     generate_ctypes_to_python: bool,
 ) !void {
@@ -202,7 +201,7 @@ fn emit_struct_ctypes(
         .type_name = python_name,
     });
 
-    inline for (type_info.fields) |field| {
+    inline for (stdx.type_fields(Type)) |field| {
         const field_type_info = @typeInfo(field.type);
 
         // Emit a bounds check for all integer types that aren't using the custom c_uint128 class.
@@ -219,7 +218,7 @@ fn emit_struct_ctypes(
 
     buffer.print("        return cls(\n", .{});
 
-    inline for (type_info.fields) |field| {
+    inline for (stdx.type_fields(Type)) |field| {
         const field_type_info = @typeInfo(field.type);
         const field_is_u128 = field_type_info == .int and field_type_info.int.bits == 128;
         const convert_prefix = if (field_is_u128) "c_uint128.from_param(" else "";
@@ -246,7 +245,7 @@ fn emit_struct_ctypes(
             .type_name = python_name,
         });
 
-        inline for (type_info.fields) |field| {
+        inline for (stdx.type_fields(Type)) |field| {
             if (comptime !std.mem.eql(u8, field.name, "reserved")) {
                 buffer.print("            {s}={s},\n", .{
                     field.name,
@@ -259,7 +258,7 @@ fn emit_struct_ctypes(
 
     buffer.print("C{s}._fields_ = [ # noqa: SLF001\n", .{python_name});
 
-    inline for (type_info.fields) |field| {
+    inline for (stdx.type_fields(Type)) |field| {
         buffer.print("    (\"{s}\", {s}),", .{
             field.name,
             zig_to_ctype(field.type),
@@ -288,14 +287,14 @@ fn convert_ctypes_to_python(comptime name: []const u8, comptime Type: type) []co
 
 fn emit_struct_dataclass(
     buffer: *Buffer,
-    comptime type_info: anytype,
+    comptime Type: type,
     comptime python_name: []const u8,
     has_default_initialization: bool,
 ) !void {
     buffer.print("@dataclass\n", .{});
     buffer.print("class {s}:\n", .{python_name});
 
-    inline for (type_info.fields) |field| {
+    inline for (stdx.type_fields(Type)) |field| {
         const field_type_info = @typeInfo(field.type);
         if (comptime !std.mem.eql(u8, field.name, "reserved")) {
             const python_type = zig_to_python(field.type);
@@ -386,7 +385,7 @@ fn emit_method(
     );
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     @setEvalBranchQuota(100_000);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -430,16 +429,16 @@ pub fn main() !void {
         switch (@typeInfo(ZigType)) {
             .@"struct" => |info| switch (info.layout) {
                 .auto => @compileError("Invalid C struct type: " ++ @typeName(ZigType)),
-                .@"packed" => try emit_enum(&buffer, ZigType, info, python_name, &.{"padding"}),
+                .@"packed" => try emit_enum(&buffer, ZigType, python_name, &.{"padding"}),
                 .@"extern" => continue,
             },
-            .@"enum" => |info| {
+            .@"enum" => {
                 comptime var skip: []const []const u8 = &.{};
                 if (ZigType == exports.tb_operation) {
                     skip = &.{ "reserved", "root", "register" };
                 }
 
-                try emit_enum(&buffer, ZigType, info, python_name, skip);
+                try emit_enum(&buffer, ZigType, python_name, skip);
             },
             else => buffer.print("{s} = {s}\n\n", .{
                 python_name,
@@ -466,7 +465,7 @@ pub fn main() !void {
             .@"struct" => |info| switch (info.layout) {
                 .@"extern" => try emit_struct_dataclass(
                     &buffer,
-                    info,
+                    ZigType,
                     python_name,
                     has_default_initialization,
                 ),
@@ -493,7 +492,7 @@ pub fn main() !void {
                 .@"packed" => continue,
                 .@"extern" => try emit_struct_ctypes(
                     &buffer,
-                    info,
+                    ZigType,
                     python_name,
                     generate_ctypes_to_python,
                 ),
@@ -587,7 +586,10 @@ pub fn main() !void {
         buffer.print("\n\n", .{});
     }
 
-    try std.io.getStdOut().writeAll(buffer.inner.items);
+    var stdout_buffer: [std.heap.page_size_min]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    try stdout_writer.interface.writeAll(buffer.inner.items);
+    try stdout_writer.interface.flush();
 }
 
 /// Used by client code generation to make clearer APIs: the name of the Event parameter,

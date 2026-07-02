@@ -9,15 +9,16 @@ const assert = std.debug.assert;
 /// when the JNI layer is unaware of when the native thread exits.
 /// https://developer.android.com/training/articles/perf-jni#threads
 pub const JNIThreadCleaner = struct {
+    const CreateKeyState = enum(u8) { uninitialized, initializing, initialized };
     var tls_key: ?tls.Key = null;
-    var create_key_once = std.once(create_key);
+    var create_key_state: std.atomic.Value(CreateKeyState) = .init(.uninitialized);
 
     /// This function calls `AttachCurrentThreadAsDaemon` to attach the current native thread to
     /// the JVM as a daemon thread. It also registers a callback to call `DetachCurrentThread`
     /// when the thread exits (e.g., when the client is closed or evicted).
     pub fn attach_current_thread_with_cleanup(jvm: *jni.JavaVM) *jni.JNIEnv {
         // Create the tls key once per JVM.
-        create_key_once.call();
+        create_key_once_call();
 
         // Set the JVM handler to the thread-local storage slot for each time a native
         // thread is started.
@@ -29,6 +30,25 @@ pub const JNIThreadCleaner = struct {
     /// Create the thread-local storage key and the corresponding destructor callback.
     /// Note: We don't need to delete the key because the JNI module cannot be unloaded,
     /// so it will always be available for the duration of the JVM process.
+    fn create_key_once_call() void {
+        while (true) switch (create_key_state.load(.acquire)) {
+            .initialized => return,
+            .uninitialized => {
+                if (create_key_state.cmpxchgStrong(
+                    .uninitialized,
+                    .initializing,
+                    .acquire,
+                    .acquire,
+                ) == null) {
+                    create_key();
+                    create_key_state.store(.initialized, .release);
+                    return;
+                }
+            },
+            .initializing => std.atomic.spinLoopHint(),
+        };
+    }
+
     fn create_key() void {
         assert(tls_key == null);
         tls_key = tls.create_key(&destructor_callback);
@@ -126,7 +146,7 @@ pub const JNIThreadCleaner = struct {
 
             fn set_key(key: Key, value: *anyopaque) void {
                 const ret = windows.FlsSetValue(key, value);
-                if (ret == std.os.windows.FALSE) {
+                if (!ret.toBool()) {
                     const message = "Unexpected result calling FlsSetValue";
                     log.err(message ++ "; Error = {}", .{ret});
                     @panic("JNI: " ++ message);
